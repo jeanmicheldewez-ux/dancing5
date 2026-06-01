@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DANCING IV</title>
+   <link rel="stylesheet" href="dancer.css">
+  <script src="https://cdn.jsdelivr.net/npm/meyda@5.6.3/dist/web/meyda.min.js"></script>
+  
+  <script src="camera_utils.js" crossorigin="anonymous"></script>
+  <script src="pose.js" crossorigin="anonymous"></script>
+
+</head>
+<body>
+ <div id="canvas-container" onclick="flipFull();"
+ style ="position:fixed; top:0; left:0;  width:100%;   height:100%; 
+ z-index:2000;   display:none;"  ></div>
+ 
+<canvas  id="mycnx" class="output_canvas" 
+ style="display:block; border:dotted green 0px;  width:60%; height:98.5%; 
+position:fixed; top:0.5%; right:20%;  z-index:7;" ></canvas>  
+
+<div id="content"> 
+ 
+
+<video id="inputVideo" playsinline style="position:fixed; 
+bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
+<canvas id="humanOverlay" style="position:fixed; bottom:244px; left:4px; width:25%; max-height:80%; z-index:1006; pointer-events:auto;"></canvas>
+
+<audio id="inputAudio" style="position:fixed; bottom:4px; left:4px; width:35%; display: none;" controls></audio>
+
+
+    <div id="controls" style="position:fixed; left:5px; top:4px; z-index:1010; " >
+      <!-- <input type="file" id="mediaFileInput" accept="audio/*,video/*"> -->
+	         <label class="custom-file-upload">
+            <input type="file"  name="load" id="mediaFileInput" accept="audio/*,video/*">
+            VIDEO / MP3
+            </label>
+			
+			&nbsp;<span style="font-size:20px; color:green;"> MIC</span> 
+			<input id="mic" type="checkbox"   style="top:7px;"  onchange="flipMike(this.checked)"/>
+			
+
+		
+           <br> <br> 	 
+
+     <div id="human-selector-controls" style="margin-top:8px; max-width:320px;">
+       <label style="display:flex; align-items:center; gap:8px;">
+         <input id="enable-human-selector" type="checkbox" checked>
+         <span>Enable human selector</span>
+       </label>
+       <label style="display:flex; align-items:center; gap:8px;">
+         <input id="auto-select-human" type="checkbox" checked>
+         <span>Auto-select first detected person</span>
+       </label>
+       <div style="margin-top:6px;">
+         Selected person: <span id="selected-human-label">none</span>
+       </div>
+       <button class="btt1" type="button" onclick="clearHumanSelection()" style="margin-top:6px;">Clear selection</button>
+     </div>
+	 
+	 <!-- <div id="learn" >Choose video</div>  -->
+	 <div id="controlsBt" style="display:none;">
+	   <button class="btt1" onclick="startVideo()">Play</button>
+	   <button class="btt1" onclick="pauseVideo()">Pause</button>	   
+        <button class="btt1" onclick="stopVideo()">Stop</button>
+		<!-- onclick="stopVideo()" -->
+		
+			<br>
+			<div id = "songname" class="" style="margin-top:12px;" >kiki</div>
+		
+		
+ <br> <input type="range" id="audio-volume-slider" min="-infinity" max="0" step="0.01" value="-2" 
+  oninput="changeVolume(this.value)" style="width:120px; display:none;" >
+  		
+		
+		</div>
+	
+		
+	<!-- <div id="alltrain" style="position:absolute; display:none;"> -->
+	  <!-- <button class="btt1" onclick="learn(7)">LEARN</button>	 -->
+	  <!-- <button class="btt1" onclick="learn(120)">LEARN 2m</button>	 -->
+	  <!-- <button class="btt1" onclick="learn(1800)">LEARN 1/2H</button> -->
+	  <!-- <button class="btt1" onclick="learn(7200)">LEARN 2H</button>	   -->
+	<!-- </div>	   -->
+	
+<div id="view-controls" style="position:fixed; bottom:5px; left:5px;">
+  <div id="avatar-visual-controls" style="max-width:560px;">
+    <div>
+      <button id="avatar-visual-toggle" type="button" title="Avatar controls" style="width:auto; padding:3px 7px;">&#128125;</button>
+    </div>
+    <div id="avatar-visual-panel" style="margin-top:6px; display:none; gap:14px; align-items:flex-start; flex-wrap:wrap;">
+      <div style="width:260px;">
+        <label for="rotation-y-slider">Rotation Y:</label>
+        <input type="range" id="rotation-y-slider" min="-12" max="12.28" step="0.01" value="0" oninput="updateRotationY(this.value)">
+        
+        <label for="rotation-x-slider">Rotation X:</label>
+        <input type="range" id="rotation-x-slider" min="-3.57" max="3.57" step="0.01" value="0" oninput="updateRotationX(this.value)">
+        
+        <label for="zoom-slider">Zoom:</label>
+        <input type="range" id="zoom-slider" min="500" max="3000" step="10" value="1500" oninput="updateZoom(this.value)">
+
+        <label for="avatar-thickness-slider">Thickness:</label>
+        <input type="range" id="avatar-thickness-slider" min="0.4" max="2.4" step="0.05" value="1">
+
+        <label for="music-reactivity-slider">Reactivity:</label>
+        <input type="range" id="music-reactivity-slider" min="0" max="100" step="1" value="50">
+
+        <label for="motion-amount-slider">Motion:</label>
+        <input type="range" id="motion-amount-slider" min="0" max="100" step="1" value="50">
+      </div>
+      <div style="width:180px;">
+      <label for="avatar-style-select">Avatar Style:</label>
+      <select id="avatar-style-select">
+        <option value="robot">Robot</option>
+        <option value="neon">Neon</option>
+        <option value="wire">Wire</option>
+        <option value="leSaint">leSaint</option>
+      </select>
+      <label for="avatar-color-input">Avatar Color:</label>
+      <input id="avatar-color-input" type="color" value="#3a5fad">
+      <label for="background-mode-select">Background:</label>
+      <select id="background-mode-select">
+        <option value="none">None</option>
+        <option value="solid">Solid color</option>
+        <option value="gradient">Animated gradient</option>
+      </select>
+      <label for="background-color-input">Background Color:</label>
+      <input id="background-color-input" type="color" value="#000000">
+      </div>
+    </div>
+  </div>
+</div>
+
+
+		
+    </div>
+
+
+    <!-- <div id="models" style="position:fixed; right:5px; top:4px; z-index:1010; " > -->
+	 
+  <div id="model-manager"
+   style="position:fixed; right:5px; top:4%;  height:96%;
+   overflow-y:auto; overflow-x:hidden; z-index:1010; ">
+   
+    
+<div style="display: inline-flex; align-items: center;">  <input id="checklearn" type="checkbox" onchange="checkLearn(this.checked);">
+  <label for="train-select" style="margin-left: 5px;">  Learn Data: <span id="moncount" style="color: green; margin-left: 5px;">000</span>
+  </label>
+</div>
+ <br>    
+    <select id="train-select"></select>
+    <button id="create-train-btn">New</button> 
+		<button id="save-data-btn">Save</button>	
+	
+
+<Hr>	<label for="validation-select" style="display: inline-block;" >Validation:</label>
+	<select id="validation-select"></select>
+	<span  style="display:none;" id="monvali"></span>
+
+	
+	<label for="hidden-layers-container">Hidden Layers:</label>
+	<div id="hidden-layers-container"></div>
+	<span id="monlay"></span>	
+	
+    <label for="model-select">Model:</label>
+    <select id="model-select"></select>
+    <button id="create-model-btn"> New Model</button>	
+
+
+ <hr>
+    <!-- <h2>Training Settings</h2> -->
+    <div id="training-settings">
+ 
+ 
+  <label for="error-thresh-slider">Error Threshold:</label>
+  <input type="number" id="error-thresh-slider" min="0.0001" max="0.7" step="0.0001" value="0.001">
+ 
+ 
+ 
+      <label for="learning-rate">Learning Error:</label>
+      <input type="number" id="learning-rate" min="0.00001" max="0.5" step="0.00001" value="0.02">
+ 
+
+
+        <label for="learn-time">Learning Time </label>
+        <input type="range" id="learn-time" min="0" max = "1440" step="0.01" value="140.2" step ="0.002"  >
+       <span id="learn-time-value">00</span>  
+	   
+	   <div id="training-controls">
+  <label for="iterations-slider">Iterations:<span id="iterations-value">20000</span></label>
+  <input type="range" id="iterations-slider" min="1" max="300000" step="1" value="40000">
+  
+
+ 
+</div>
+ 
+    </div>
+	
+	
+
+ 
+    <button id="train-model-btn">Train Model</button>
+    <button id="save-model-btn">Save Model</button>
+    <br>
+    <button id="export-model-json-btn" type="button" style="margin-top:6px;">Export model JSON</button>
+    <button id="import-model-json-btn" type="button" style="margin-top:6px;">Import model JSON</button>
+    <input id="import-model-json-input" type="file" accept="application/json,.json" style="display:none;">
+    <button id="load-demo-model-btn" type="button" style="margin-top:6px; display:none;">Load demo model</button>
+    <div id="model-json-status" style="max-width:260px; color:#ff4400; margin-top:6px;"></div>
+	<br><span id="monerror" style="display:block; z-index:1100; color:#ff4400; margin-top:7px;">0.00000000</span> 
+    <button id="download-model-btn" style="display:none;" >Download Model</button>
+ 
+    <!-- <h2>Training Progress</h2> -->
+    <div id="training-log"  style="display:none;" ></div>
+  </div>
+	<!-- <div>  -->
+	
+	<div style="position: fixed; right: 4px; top: 4px; font-size:30px; border:solid green 2px;
+font-weight:bold; padding-top:0px;  padding-bottom:0px;	border-radius:4px;" onclick="flipFull();">
+&#128125;</div>
+
+
+<div id="monsound" style="position: fixed; right:4px; bottom:4px; width:64px; height:20px; display:flex; align-items:flex-end; gap:0; overflow:hidden;"></div>
+
+</div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
+<!-- <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script> -->
+<script type="module">
+  import {
+    FilesetResolver,
+    ObjectDetector
+  } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.mjs";
+
+  const bridge = {
+    detector: null,
+    ready: false,
+    error: null,
+    async init() {
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+
+        this.detector = await ObjectDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-tasks/object_detector/efficientdet_lite0_uint8.tflite"
+          },
+          runningMode: "VIDEO",
+          maxResults: 8,
+          scoreThreshold: 0.4
+        });
+
+        this.ready = true;
+        console.log("Object detector ready");
+      } catch (error) {
+        this.error = error;
+        this.ready = false;
+        console.error("Object detector init failed:", error);
+      }
+    },
+    isReady() {
+      return this.ready && !!this.detector;
+    },
+    detectForVideo(videoElement, timestampMs) {
+      if (!this.isReady()) return null;
+      return this.detector.detectForVideo(videoElement, timestampMs);
+    }
+  };
+
+  window.objectDetectionBridge = bridge;
+  bridge.init();
+</script>
+
+   <script  src="brain.js"></script>
+  <script  src="dancer-6.js"></script>	
+</body>
+</html>

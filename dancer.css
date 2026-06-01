@@ -1,0 +1,388 @@
+body {
+    background-color: black;
+    font-family: Monaco, 'Lucida Console', monospace;
+
+    color: green;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start; /* Align items to the top */
+        height: 100%;
+    overflow: auto;
+    min-height: 100vh; /* Ensure the body grows with content */
+    margin: 0; /* Remove default margin */
+    padding: 0; /* Remove default padding */
+}
+
+body.dancing5-bg-gradient {
+    background: linear-gradient(120deg, #000000, #062b2b, #22002d, #000000);
+    background-size: 300% 300%;
+    animation: dancing5-bg-pan 18s ease-in-out infinite;
+}
+
+@keyframes dancing5-bg-pan {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+        .content {
+            padding: 20px;
+            border: 1px solid green;
+            margin: 10px;
+            text-align: center;
+        }
+
+        .fixed-div {
+            position: fixed;
+            right: 4px;
+            top: 4px;
+            border: 1px solid green;
+            padding: 10px;
+            background-color: black;
+        }
+
+        .fixed-div span {
+            display: block;
+            position: absolute;
+        }
+
+        #monerror {
+            right: 20px;
+        }
+
+        #moncount {
+            right: 114px;
+        }
+    .analyzer-div {
+      display: inline-block;
+      background-color: #444;
+      color: #fff;
+      margin: 10px;
+      padding: 15px;
+      border-radius: 10px;
+      text-align: center;
+      transition: width 0.2s, height 0.2s, background-color 0.2s;
+    }
+	
+	
+    .title {
+      font-size: 1.2em;
+      margin-bottom: 10px;
+    }
+	
+ 
+
+#model-manager {
+  max-width: 600px;
+  margin: auto;
+}
+
+label {
+  display: block;
+  margin-top: 10px;
+  padding-bottom:4px;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+#training-log {
+  border: 1px solid #ccc;
+  padding: 10px;
+  height: 200px;
+  overflow-y: scroll;
+}
+
+#model-manager {
+    height: 400px; /* Set a fixed height to enable scrolling */
+    overflow-y: auto; /* Enable vertical scrolling */
+    scrollbar-width: thin; /* For modern browsers, sets the scrollbar to be thin */
+    scrollbar-color: green black; /* Green for the thumb, black for the track */
+}
+
+/* For WebKit-based browsers (Chrome, Edge, Safari) */
+#model-manager::-webkit-scrollbar {
+    width: 8px; /* Width of the scrollbar */
+}
+
+#model-manager::-webkit-scrollbar-thumb {
+    background-color: green; /* Color of the scrollbar thumb */
+    border-radius: 4px; /* Optional: Round edges for the scrollbar */
+}
+
+#model-manager::-webkit-scrollbar-track {
+    background-color: black; /* Color of the scrollbar track */
+}
+
+
+/* =========================
+   General Styles for Inputs
+========================= */
+
+/* Text Inputs */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="number"],
+input[type="file"] {
+    background-color: #000;          /* Black background */
+    color: #0f0;                     /* Green text */
+    border: 1px solid #0f0;          /* Thin green border */
+    padding: 4px 6px;                /* Reduced padding */
+    border-radius: 4px;              /* Slightly rounded corners */
+    outline: none;                   /* Remove default outline */
+    font-size: 16px;                 /* Increase font size for readability */
+    transition: border-color 0.3s, box-shadow 0.3s; /* Smooth transitions */
+}
+
+/* Remove Spin Buttons in Number Inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;       /* Remove spin buttons in Firefox */
+}
+
+/* File Input Styles */
+input[type="file"] {
+    display: none;                    /* Hide the default file input */
+}
+
+.custom-file-upload {
+    display: inline-block;
+    background-color: #000;          /* Black background */
+    color: #0f0;                      /* Green text */
+    border: 1px solid #0f0;           /* Thin green border */
+    padding: 5px 10px;                /* Reduced padding */
+    border-radius: 4px;               /* Slightly rounded corners */
+    cursor: pointer;                  /* Pointer cursor on hover */
+    font-size: 16px;                  /* Consistent font size */
+    transition: background-color 0.3s, color 0.3s; /* Smooth transitions */
+}
+
+.custom-file-upload:hover {
+    background-color: #0f0;           /* Green background on hover */
+    color: #000;                      /* Black text on hover */
+}
+
+/* =========================
+   Range Slider Styles
+========================= */
+
+input[type="range"] {
+    -webkit-appearance: none;         /* Remove default styling */
+    width: 100%;                      /* Full width */
+    height: 8px;                      /* Track height */
+    background: #0f0;                 /* Green track */
+    border-radius: 4px;               /* Rounded track */
+    outline: none;                    /* Remove outline */
+    margin: 15px 0;                   /* Vertical spacing */
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;         /* Remove default thumb */
+    appearance: none;
+    width: 20px;                      /* Thumb width */
+    height: 20px;                     /* Thumb height */
+    background: #0f0;                 /* Green thumb */
+    border: 2px solid #0f0;           /* Green border */
+    border-radius: 50%;               /* Circular thumb */
+    cursor: pointer;                  /* Pointer cursor on hover */
+    margin-top: -6px;                 /* Align thumb vertically */
+}
+
+input[type="range"]::-moz-range-thumb,
+input[type="range"]::-ms-thumb {
+    width: 20px;
+    height: 20px;
+    background: #0f0;
+    border: 2px solid #0f0;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+input[type="range"]::-moz-range-track,
+input[type="range"]::-ms-track {
+    background: transparent;          /* Transparent to show the custom track */
+    border: none;
+}
+
+/* =========================
+   Button Styles
+========================= */
+
+button,
+input[type="submit"],
+input[type="button"] {
+    background-color: #000;          /* Black background */
+    color: #0f0;                      /* Green text */
+    border: 1px solid #0f0;           /* Thin green border */
+    padding: 5px 10px;                /* Reduced padding */
+    border-radius: 4px;               /* Slightly rounded corners */
+    cursor: pointer;                  /* Pointer cursor on hover */
+    font-size: 16px;                  /* Consistent font size */
+    transition: background-color 0.3s, color 0.3s; /* Smooth transitions */
+}
+
+button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover {
+    background-color: #0f0;           /* Green background on hover */
+    color: #000;                      /* Black text on hover */
+}
+
+/* =========================
+   Select Element Styles
+========================= */
+
+select {
+    background-color: #000;          /* Black background */
+    color: #0f0;                      /* Green text */
+    border: 1px solid #0f0;           /* Thin green border */
+    padding: 4px 6px;                 /* Reduced padding */
+    border-radius: 4px;               /* Slightly rounded corners */
+    appearance: none;                 /* Remove default arrow */
+    -webkit-appearance: none;         /* Remove default arrow in WebKit */
+    -moz-appearance: none;            /* Remove default arrow in Firefox */
+    background-image: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="%230f0"><polygon points="0,0 10,0 5,5"/></svg>'); /* Custom green arrow */
+    background-repeat: no-repeat;
+    background-position: right 6px center; /* Adjusted position */
+    background-size: 10px;
+    cursor: pointer;                  /* Pointer cursor on hover */
+    font-size: 16px;                  /* Consistent font size */
+    transition: border-color 0.3s, box-shadow 0.3s; /* Smooth transitions */
+	min-width:40px;
+}
+
+select:hover {
+    border-color: #0f0;               /* Ensure border remains green on hover */
+}
+
+select:focus {
+    border-color: #0f0;
+    box-shadow: 0 0 5px #0f0;         /* Green glow on focus */
+    outline: none;                    /* Remove default outline */
+}
+
+/* Style the dropdown arrow for Internet Explorer */
+select::-ms-expand {
+    display: none;
+}
+
+/* =========================
+   Option Element Styles
+========================= */
+
+select option {
+    background-color: #000;          /* Black background */
+    color: #0f0;                      /* Green text */
+}
+
+/* =========================
+   Responsive Adjustments
+========================= */
+
+/* Ensure inputs and selects take full width on smaller screens */
+@media (max-width: 600px) {
+    input[type="text"],
+    input[type="password"],
+    input[type="email"],
+    input[type="number"],
+    input[type="range"],
+    select,
+    button,
+    input[type="submit"],
+    input[type="button"] {
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .custom-file-upload {
+        width: 100%;
+        text-align: center;
+    }
+}
+
+
+
+input[type="checkbox"] {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background-color: #333; /* Dark grey to blend with background */
+    border: 2px solid #0f0; /* Green border */
+    border-radius: 4px;
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.3s, border-color 0.3s;
+}
+
+input[type="checkbox"]:checked {
+    background-color: #0f0; /* Green background when checked */
+    border-color: #0f0; /* Green border */
+}
+
+input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    width: 4px;
+    height: 8px;
+    border: solid #333;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+hr
+{
+	border-color: green;	
+}
+
+#humanOverlay {
+    display: none;
+    touch-action: none;
+}
+
+#avatar-visual-panel {
+    font-size: 12px;
+    line-height: 1.05;
+}
+
+#avatar-visual-panel label {
+    margin-top: 5px;
+    padding-bottom: 1px;
+}
+
+#avatar-visual-panel input[type="range"] {
+    height: 6px;
+    margin: 5px 0;
+}
+
+#avatar-visual-panel input[type="range"]::-webkit-slider-thumb {
+    width: 15px;
+    height: 15px;
+}
+
+#avatar-visual-panel input[type="range"]::-moz-range-thumb,
+#avatar-visual-panel input[type="range"]::-ms-thumb {
+    width: 15px;
+    height: 15px;
+}
+
+#avatar-visual-panel select,
+#avatar-visual-panel input,
+#avatar-visual-panel button {
+    font-size: 12px;
+}
+
+
+
+

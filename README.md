@@ -49,11 +49,6 @@ Then open:
 http://localhost:8080/index.html
 ```
 
-The working app page is also available at:
-
-```text
-http://localhost:8080/index-6.html
-```
 
 Using a local server is recommended. Browser microphone, camera, module imports, and `fetch()` demo-model loading are more reliable on `localhost` or HTTPS than from `file://`.
 

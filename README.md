@@ -1,8 +1,11 @@
+
 # Dancing5
 
 Browser-based creative AI dancer models for music-reactive avatars and live visuals.
 
 Dancing5 is a static browser app for training, loading, and performing with neural-network dancer models. Music or microphone input is analysed in the browser, converted into normalized control values, passed through a dancer model, and rendered as animated avatar motion on canvas.
+
+<img width="520" height="434" alt="sh-1" src="https://github.com/user-attachments/assets/f1903f54-816d-4d2b-8ce1-e6f92d64ec3c" />
 
 ## Live Demo
 

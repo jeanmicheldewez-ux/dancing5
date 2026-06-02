@@ -719,7 +719,7 @@ function analyzeAudio() {
     updateSoundMeter(dataArray);
     if (isMicrophoneActive && now - lastAudioLevelLogAt > 1500) {
       lastAudioLevelLogAt = now;
-      console.log(`Microphone audio level low=${lowEnergy.toFixed(2)} high=${highEnergy.toFixed(2)} ctx=${audioContext ? audioContext.state : 'none'}`);
+     // console.log(`Microphone audio level low=${lowEnergy.toFixed(2)} high=${highEnergy.toFixed(2)} ctx=${audioContext ? audioContext.state : 'none'}`);
     }
     //console.log("Audio data sum:", sum); // Debug the audio data
 

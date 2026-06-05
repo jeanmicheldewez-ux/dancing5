@@ -13,7 +13,7 @@ GitHub Pages demo:
 
 https://jeanmicheldewez-ux.github.io/dancing5/
 
-The public demo imports `examples/demo-breaker.json` on startup so visitors do not need existing browser storage. `examples/basic-dancer-model.json` is also kept as a compatibility demo model file.
+The public demo imports example models from `examples/models.json` on startup so visitors do not need existing browser storage. Current demo models include `examples/demo-breaker.json` and `examples/demo-disco.json`.
 
 ## Features
 
@@ -48,7 +48,6 @@ Then open:
 ```text
 http://localhost:8080/index.html
 ```
-
 
 Using a local server is recommended. Browser microphone, camera, module imports, and `fetch()` demo-model loading are more reliable on `localhost` or HTTPS than from `file://`.
 

@@ -48,6 +48,9 @@ const importModelJsonInput = document.getElementById('import-model-json-input');
 const loadDemoModelBtn = document.getElementById('load-demo-model-btn');
 const modelJsonStatus = document.getElementById('model-json-status');
 const avatarStyleSelect = document.getElementById('avatar-style-select');
+const avatarHeadPictureControls = document.getElementById('avatar-head-picture-controls');
+const avatarHeadPictureSelect = document.getElementById('avatar-head-picture-select');
+const avatarHeadPictureInput = document.getElementById('avatar-head-picture-input');
 const avatarColorInput = document.getElementById('avatar-color-input');
 const avatarThicknessSlider = document.getElementById('avatar-thickness-slider');
 const musicReactivitySlider = document.getElementById('music-reactivity-slider');
@@ -56,12 +59,31 @@ const backgroundModeSelect = document.getElementById('background-mode-select');
 const backgroundColorInput = document.getElementById('background-color-input');
 const avatarVisualToggle = document.getElementById('avatar-visual-toggle');
 const avatarVisualPanel = document.getElementById('avatar-visual-panel');
+const modelManager = document.getElementById('model-manager');
+const modelManagerToggle = document.getElementById('model-manager-toggle');
+const mainControls = document.getElementById('controls');
+const mainControlsToggle = document.getElementById('main-controls-toggle');
 const trainingLog = document.getElementById('training-log');
 
 const MODEL_EXPORT_FORMAT_VERSION = 1;
 const DEFAULT_DEMO_MODEL_PATH = 'examples/demo-breaker.json';
 const DEFAULT_DEMO_MODEL_NAME = 'demo-breaker.json';
+const EXAMPLE_MODEL_MANIFEST_PATH = 'examples/models.json';
+const EXAMPLE_MODEL_FILES = [
+  'demo-breaker.json',
+  'demo-disco.json'
+];
 const LAST_MODEL_STORAGE_KEY = 'Dancing5.lastModelName';
+const SETTINGS_STORE_NAME = 'settings';
+const LAST_SESSION_SETTINGS_NAME = '__last-session__';
+const HEAD_PICTURES_STORAGE_KEY = 'Dancing5.headPictures';
+const SELECTED_HEAD_PICTURE_STORAGE_KEY = 'Dancing5.selectedHeadPicture';
+const UPLOAD_HEAD_PICTURE_VALUE = '__upload_head_picture__';
+const DEFAULT_HEAD_PICTURE = {
+  name: 'jmx',
+  src: 'pictures/jmx.png',
+  builtIn: true
+};
 const DEFAULT_VISUAL_SETTINGS = {
   avatarStyle: 'robot',
   avatarColor: '#3a5fad',
@@ -72,6 +94,46 @@ const DEFAULT_VISUAL_SETTINGS = {
   backgroundColor: '#000000'
 };
 let visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS);
+const CUSTOM_HEAD_IMAGE = new Image();
+let selectedHeadPictureName = DEFAULT_HEAD_PICTURE.name;
+
+function setMainControlsVisible(visible) {
+  if (mainControls) mainControls.style.display = visible ? '' : 'none';
+  if (visible) {
+    if (avatarVisualPanel) avatarVisualPanel.style.display = 'none';
+    if (modelManager) modelManager.style.display = 'none';
+    if (avatarVisualToggle) avatarVisualToggle.setAttribute('aria-expanded', 'false');
+    if (modelManagerToggle) modelManagerToggle.setAttribute('aria-expanded', 'false');
+  }
+  if (mainControlsToggle) mainControlsToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
+}
+
+function setModelManagerVisible(visible) {
+  if (modelManager) modelManager.style.display = visible ? '' : 'none';
+  if (visible) {
+    if (avatarVisualPanel) avatarVisualPanel.style.display = 'none';
+    if (mainControls) mainControls.style.display = 'none';
+    if (avatarVisualToggle) avatarVisualToggle.setAttribute('aria-expanded', 'false');
+    if (mainControlsToggle) mainControlsToggle.setAttribute('aria-expanded', 'false');
+  }
+  if (modelManagerToggle) modelManagerToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
+}
+
+function setAvatarVisualPanelVisible(visible) {
+  if (avatarVisualPanel) avatarVisualPanel.style.display = visible ? 'flex' : 'none';
+  if (visible) {
+    if (modelManager) modelManager.style.display = 'none';
+    if (mainControls) mainControls.style.display = 'none';
+    if (modelManagerToggle) modelManagerToggle.setAttribute('aria-expanded', 'false');
+    if (mainControlsToggle) mainControlsToggle.setAttribute('aria-expanded', 'false');
+  }
+  if (avatarVisualToggle) avatarVisualToggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
+  if (visible) flagPannel = false;
+}
+
+setModelManagerVisible(false);
+setAvatarVisualPanelVisible(false);
+setMainControlsVisible(true);
 
  
 const learningRateInput = document.getElementById('learning-rate');
@@ -79,6 +141,133 @@ const learningRateValue = document.getElementById('learning-rate-value');
 
 let validation = "sigmoid"; 
 let startupDemoLoadStarted = false;
+let lastSessionSaveTimer = null;
+let sessionAutosaveEnabled = false;
+
+function scheduleLastSessionSave() {
+  if (!sessionAutosaveEnabled) return;
+  if (lastSessionSaveTimer) clearTimeout(lastSessionSaveTimer);
+  lastSessionSaveTimer = setTimeout(async () => {
+    try {
+      if (currentModelName) await saveModelSettings(currentModelName);
+      await saveLastSession();
+    } catch (error) {
+      console.warn('Could not autosave settings:', error);
+    }
+  }, 250);
+}
+
+function getModelDisplayName(modelName) {
+  return String(modelName || '').replace(/\.json$/i, '');
+}
+
+function getPictureDisplayName(fileName) {
+  return String(fileName || '').replace(/\.(png|jpe?g)$/i, '');
+}
+
+function readStoredHeadPictures() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HEAD_PICTURES_STORAGE_KEY) || '[]');
+    return Array.isArray(saved)
+      ? saved.filter(item => item && item.name && item.src)
+      : [];
+  } catch (error) {
+    console.warn('Could not read saved head pictures:', error);
+    return [];
+  }
+}
+
+function writeStoredHeadPictures(pictures) {
+  try {
+    localStorage.setItem(HEAD_PICTURES_STORAGE_KEY, JSON.stringify(pictures));
+  } catch (error) {
+    console.warn('Could not save head picture. The image may be too large for localStorage:', error);
+    alert('This picture is too large to save locally. Try a smaller PNG or JPG.');
+  }
+}
+
+function getHeadPictures() {
+  const stored = readStoredHeadPictures();
+  const byName = new Map([[DEFAULT_HEAD_PICTURE.name, DEFAULT_HEAD_PICTURE]]);
+  stored.forEach(item => byName.set(item.name, item));
+  return Array.from(byName.values());
+}
+
+function rememberSelectedHeadPicture(name) {
+  try {
+    localStorage.setItem(SELECTED_HEAD_PICTURE_STORAGE_KEY, name);
+  } catch (error) {
+    console.warn('Could not save selected head picture:', error);
+  }
+}
+
+function setCustomHeadPicture(name) {
+  const pictures = getHeadPictures();
+  const picture = pictures.find(item => item.name === name) || DEFAULT_HEAD_PICTURE;
+  selectedHeadPictureName = picture.name;
+  CUSTOM_HEAD_IMAGE.src = picture.src;
+  rememberSelectedHeadPicture(selectedHeadPictureName);
+  if (avatarHeadPictureSelect) avatarHeadPictureSelect.value = selectedHeadPictureName;
+}
+
+function populateHeadPictureSelect() {
+  if (!avatarHeadPictureSelect) return;
+
+  const previousValue = selectedHeadPictureName || DEFAULT_HEAD_PICTURE.name;
+  avatarHeadPictureSelect.innerHTML = '';
+
+  getHeadPictures().forEach(picture => {
+    const option = document.createElement('option');
+    option.value = picture.name;
+    option.textContent = picture.name;
+    avatarHeadPictureSelect.appendChild(option);
+  });
+
+  const uploadOption = document.createElement('option');
+  uploadOption.value = UPLOAD_HEAD_PICTURE_VALUE;
+  uploadOption.textContent = 'UPLOAD';
+  uploadOption.className = 'avatar-head-upload-option';
+  avatarHeadPictureSelect.appendChild(uploadOption);
+
+  const hasPrevious = Array.from(avatarHeadPictureSelect.options).some(option => option.value === previousValue);
+  avatarHeadPictureSelect.value = hasPrevious ? previousValue : DEFAULT_HEAD_PICTURE.name;
+}
+
+function initializeHeadPictureSelect() {
+  populateHeadPictureSelect();
+  let savedName = DEFAULT_HEAD_PICTURE.name;
+  try {
+    savedName = localStorage.getItem(SELECTED_HEAD_PICTURE_STORAGE_KEY) || DEFAULT_HEAD_PICTURE.name;
+  } catch (error) {
+    console.warn('Could not read selected head picture:', error);
+  }
+  setCustomHeadPicture(savedName);
+}
+
+function saveUploadedHeadPicture(file) {
+  if (!file) return;
+  if (!/^image\/(png|jpeg)$/.test(file.type)) {
+    alert('Please choose a PNG or JPG picture.');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const name = getPictureDisplayName(file.name) || 'custom-head';
+    const pictures = readStoredHeadPictures().filter(item => item.name !== name);
+    pictures.push({ name, src: reader.result });
+    writeStoredHeadPictures(pictures);
+    selectedHeadPictureName = name;
+    populateHeadPictureSelect();
+    setCustomHeadPicture(name);
+    if (avatarStyleSelect) {
+      avatarStyleSelect.value = 'myHead';
+      readVisualSettingsFromControls();
+    }
+  };
+  reader.onerror = () => alert('The picture could not be loaded.');
+  reader.readAsDataURL(file);
+}
  
 // learningRateInput.addEventListener('input', updateLearningRateDisplay);
 
@@ -95,6 +284,13 @@ const dpr = window.devicePixelRatio || 1;
 canvasElement.width  = canvasElement.clientWidth  * dpr;
 canvasElement.height = canvasElement.clientHeight * dpr;
 canvasCtx.scale(dpr, dpr);
+
+function clearAvatarCanvas() {
+  canvasCtx.save();
+  canvasCtx.setTransform(1, 0, 0, 1, 0, 0);
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  canvasCtx.restore();
+}
 
 // Get the DOM elements
 const learnTimeInput = document.getElementById('learn-time');
@@ -134,6 +330,7 @@ function updateLearnTimeDisplay() {
 
   // Update the displayed value
   learnTimeValue.textContent = timeString;
+  scheduleLastSessionSave();
   //console.log('Result Value in Seconds:', timeLearn); // Log result value in seconds for debugging
 }
 
@@ -171,6 +368,7 @@ validationSelect.addEventListener('change', updateValidationSelection);
 
 function updateValidationSelection(event) {
   validation = event.target.value;
+  scheduleLastSessionSave();
 }
 //////////////////////////////////
 
@@ -265,6 +463,7 @@ function updateHiddenLayers() {
       if (typeof network !== 'undefined' && network !== null) {
       // network.hiddenLayers = hiddenLayers;
       }
+      scheduleLastSessionSave();
 } 
 
 
@@ -279,7 +478,17 @@ function updateHiddenLayers() {
   if (loadDemoModelBtn) loadDemoModelBtn.addEventListener('click', loadDemoModelJson);
   if (avatarVisualToggle && avatarVisualPanel) {
     avatarVisualToggle.addEventListener('click', () => {
-      avatarVisualPanel.style.display = avatarVisualPanel.style.display === 'none' ? '' : 'none';
+      setAvatarVisualPanelVisible(avatarVisualPanel.style.display === 'none');
+    });
+  }
+  if (modelManagerToggle && modelManager) {
+    modelManagerToggle.addEventListener('click', () => {
+      setModelManagerVisible(modelManager.style.display === 'none');
+    });
+  }
+  if (mainControlsToggle && mainControls) {
+    mainControlsToggle.addEventListener('click', () => {
+      setMainControlsVisible(mainControls.style.display === 'none');
     });
   }
   
@@ -454,10 +663,10 @@ function initSoundMeter() {
   for (let i = 0; i < 64; i++) {
     const bar = document.createElement('span');
     bar.style.display = 'block';
-    bar.style.width = '1px';
+    bar.style.width = '2px';
     bar.style.height = '1px';
     bar.style.backgroundColor = '#00ff66';
-    bar.style.opacity = '0.95';
+    bar.style.opacity = '0.7';
     meter.appendChild(bar);
     soundMeterBars.push(bar);
   }
@@ -1812,7 +2021,7 @@ function getAvatarPalette() {
 
 function applyVisualSettings(settings) {
   visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS, settings || {});
-  visualSettings.avatarStyle = ['robot', 'neon', 'wire', 'leSaint'].includes(visualSettings.avatarStyle)
+  visualSettings.avatarStyle = ['robot', 'myHead', 'neon', 'wire', 'leSaint'].includes(visualSettings.avatarStyle)
     ? visualSettings.avatarStyle
     : DEFAULT_VISUAL_SETTINGS.avatarStyle;
   visualSettings.avatarColor = normalizeHexColor(visualSettings.avatarColor, DEFAULT_VISUAL_SETTINGS.avatarColor);
@@ -1831,6 +2040,9 @@ function applyVisualSettings(settings) {
   if (motionAmountSlider) motionAmountSlider.value = visualSettings.motionAmount;
   if (backgroundModeSelect) backgroundModeSelect.value = visualSettings.backgroundMode;
   if (backgroundColorInput) backgroundColorInput.value = visualSettings.backgroundColor;
+  if (avatarHeadPictureControls) {
+    avatarHeadPictureControls.style.display = visualSettings.avatarStyle === 'myHead' ? '' : 'none';
+  }
 
   document.body.classList.toggle('dancing5-bg-gradient', visualSettings.backgroundMode === 'gradient');
   if (visualSettings.backgroundMode === 'solid') {
@@ -1850,19 +2062,40 @@ function readVisualSettingsFromControls() {
     backgroundMode: backgroundModeSelect ? backgroundModeSelect.value : visualSettings.backgroundMode,
     backgroundColor: backgroundColorInput ? backgroundColorInput.value : visualSettings.backgroundColor
   });
+  scheduleLastSessionSave();
 }
 
 if (avatarStyleSelect) avatarStyleSelect.addEventListener('change', readVisualSettingsFromControls);
+if (avatarHeadPictureSelect) {
+  avatarHeadPictureSelect.addEventListener('change', () => {
+    if (avatarHeadPictureSelect.value === UPLOAD_HEAD_PICTURE_VALUE) {
+      avatarHeadPictureSelect.value = selectedHeadPictureName;
+      if (avatarHeadPictureInput) avatarHeadPictureInput.click();
+      return;
+    }
+    setCustomHeadPicture(avatarHeadPictureSelect.value);
+    scheduleLastSessionSave();
+  });
+}
+if (avatarHeadPictureInput) {
+  avatarHeadPictureInput.addEventListener('change', event => {
+    const file = event.target.files && event.target.files[0];
+    saveUploadedHeadPicture(file);
+    scheduleLastSessionSave();
+    avatarHeadPictureInput.value = '';
+  });
+}
 if (avatarColorInput) avatarColorInput.addEventListener('input', readVisualSettingsFromControls);
 if (avatarThicknessSlider) avatarThicknessSlider.addEventListener('input', readVisualSettingsFromControls);
 if (musicReactivitySlider) musicReactivitySlider.addEventListener('input', readVisualSettingsFromControls);
 if (motionAmountSlider) motionAmountSlider.addEventListener('input', readVisualSettingsFromControls);
 if (backgroundModeSelect) backgroundModeSelect.addEventListener('change', readVisualSettingsFromControls);
 if (backgroundColorInput) backgroundColorInput.addEventListener('input', readVisualSettingsFromControls);
+initializeHeadPictureSelect();
 applyVisualSettings(visualSettings);
 
 function drawRobotBoy(poseLandmarks) {
-  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  clearAvatarCanvas();
 
   const lm = poseLandmarks;
   if (!lm || lm.length < 13) return;
@@ -1968,6 +2201,40 @@ function drawRobotBoy(poseLandmarks) {
     canvasCtx.strokeStyle = "#1a1a2e";
     canvasCtx.lineWidth = clamp(r * 0.16, 1.5, 8);
     canvasCtx.stroke();
+  }
+
+  function drawCustomHeadImage(x, y, w, h, skew) {
+    if (!CUSTOM_HEAD_IMAGE.complete || !CUSTOM_HEAD_IMAGE.naturalWidth) return false;
+
+    const displayW = w * 1.33;
+    const displayH = h * 1.33;
+    const displayX = x - (displayW - w) / 2;
+    const displayY = y - (displayH - h) / 2;
+    const imgRatio = CUSTOM_HEAD_IMAGE.naturalWidth / CUSTOM_HEAD_IMAGE.naturalHeight;
+    const boxRatio = displayW / displayH;
+    let sourceX = 0;
+    let sourceY = 0;
+    let sourceW = CUSTOM_HEAD_IMAGE.naturalWidth;
+    let sourceH = CUSTOM_HEAD_IMAGE.naturalHeight;
+
+    if (imgRatio > boxRatio) {
+      sourceW = sourceH * boxRatio;
+      sourceX = (CUSTOM_HEAD_IMAGE.naturalWidth - sourceW) / 2;
+    } else {
+      sourceH = sourceW / boxRatio;
+      sourceY = (CUSTOM_HEAD_IMAGE.naturalHeight - sourceH) / 2;
+    }
+
+    canvasCtx.save();
+    canvasCtx.translate(displayX + skew, displayY);
+    canvasCtx.transform(1, 0, (-2 * skew) / displayH, 1, 0, 0);
+    canvasCtx.beginPath();
+    canvasCtx.roundRect(0, 0, displayW, displayH, displayW * 0.12);
+    canvasCtx.clip();
+    canvasCtx.drawImage(CUSTOM_HEAD_IMAGE, sourceX, sourceY, sourceW, sourceH, 0, 0, displayW, displayH);
+    canvasCtx.restore();
+
+    return true;
   }
 
   const palette = getAvatarPalette();
@@ -2177,6 +2444,10 @@ const headSkew = clamp(shoulderDepth * hW * 0.85, -hW * 0.22, hW * 0.22);
 
 const faceSkew = headSkew * 0.55;
 
+  if (visualSettings.avatarStyle === 'myHead' && drawCustomHeadImage(hX, hY, hW, hH, headSkew)) {
+    return;
+  }
+
 	// Head box with fake 3D rotation
 	drawSkewedRoundBox(
 	  hX,
@@ -2349,7 +2620,7 @@ function drawBoy(dtx) {
   }
 
 	
-     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+     clearAvatarCanvas();
     const scale = AVATAR_DRAW_SCALE;
     const perspective = zoom; // Use zoom as the perspective depth factor
     const viewerDistance = 800; // Simulate distance of the viewer from the projection plane
@@ -2459,16 +2730,19 @@ function drawBoy(dtx) {
 // Update rotation around Y-axis from slider input (moving the camera around the subject)
 function updateRotationY(value) {
     cameraAngleY = parseFloat(value);
+    scheduleLastSessionSave();
 }
 
 // Update rotation around X-axis from slider input (moving the camera around the subject)
 function updateRotationX(value) {
     cameraAngleX = parseFloat(value);
+    scheduleLastSessionSave();
 }
 
 // Update zoom level from slider input
 function updateZoom(value) {
     zoom = parseFloat(value);
+    scheduleLastSessionSave();
 }
 
 
@@ -2585,7 +2859,11 @@ const iterationsSlider = document.getElementById('iterations-slider');
  
 iterationsSlider.addEventListener('input', () => {
   iterationsValue.textContent = iterationsSlider.value;
+  scheduleLastSessionSave();
 });
+
+if (learningRateInput) learningRateInput.addEventListener('input', scheduleLastSessionSave);
+if (errorThreshSlider) errorThreshSlider.addEventListener('input', scheduleLastSessionSave);
 
  
 
@@ -2634,7 +2912,7 @@ function createNewModel() {
     const modelSelect = document.getElementById('model-select');
     const option = document.createElement('option');
     option.value = modelName;
-    option.textContent = modelName;
+    option.textContent = getModelDisplayName(modelName);
     modelSelect.appendChild(option);
 
     // Select the new model in the dropdown
@@ -2708,7 +2986,7 @@ const dbReady = new Promise((resolve, reject) => {
 	resolveDbReady = resolve;
 	rejectDbReady = reject;
 });
-const request = indexedDB.open('LocalDB', 1);
+const request = indexedDB.open('LocalDB', 2);
 
 request.onerror = function(event) {
 	console.error('Database error:', event.target.errorCode);
@@ -2722,6 +3000,9 @@ request.onupgradeneeded = function(event) {
 	}
 	if (!db.objectStoreNames.contains('models')) {
 		db.createObjectStore('models', { keyPath: 'name' });
+	}
+	if (!db.objectStoreNames.contains(SETTINGS_STORE_NAME)) {
+		db.createObjectStore(SETTINGS_STORE_NAME, { keyPath: 'name' });
 	}
 };
 
@@ -2773,7 +3054,7 @@ async function populateModels() {
 		models.forEach(model => {
 			const option = document.createElement('option');
 			option.value = model.name;
-			option.textContent = model.name;
+			option.textContent = getModelDisplayName(model.name);
 			selecto.appendChild(option);
 		});
 
@@ -2782,29 +3063,37 @@ async function populateModels() {
 			return;
 		}
 
-		const lastModelName = getLastModelName();
+		const lastSession = await readSettingsRecord(LAST_SESSION_SETTINGS_NAME);
+		const lastSessionModelName = lastSession && lastSession.modelName ? lastSession.modelName : null;
+		const lastModelName = lastSessionModelName || getLastModelName();
 		const lastModelExists = lastModelName && models.some(model => model.name === lastModelName);
 
 		if (lastModelExists) {
 			selecto.value = lastModelName;
-			loadModel(lastModelName);
+			await loadModel(lastModelName);
 			return;
+		}
+
+		if (lastSession && lastSession.settings) {
+			applySettingsSnapshot(lastSession.settings);
 		}
 
 		const defaultDemoExists = models.some(model => model.name === DEFAULT_DEMO_MODEL_NAME);
 		if (defaultDemoExists) {
 			selecto.value = DEFAULT_DEMO_MODEL_NAME;
-			loadModel(DEFAULT_DEMO_MODEL_NAME);
+			await loadModel(DEFAULT_DEMO_MODEL_NAME);
 			return;
 		}
 
 		const defaultModel = getMostRecentModelRecord(models) || models[0];
 		if (defaultModel && defaultModel.name) {
 			selecto.value = defaultModel.name;
-			loadModel(defaultModel.name);
+			await loadModel(defaultModel.name);
 		}
 	} catch (error) {
 		console.error('Error fetching models:', error);
+	} finally {
+		sessionAutosaveEnabled = true;
 	}
 }
 
@@ -2854,16 +3143,43 @@ function getMostRecentModelRecord(models) {
 	})[0];
 }
 
+async function getExampleModelFiles() {
+	try {
+		const response = await fetch(EXAMPLE_MODEL_MANIFEST_PATH, { cache: 'no-store' });
+		if (!response.ok) throw new Error(`${EXAMPLE_MODEL_MANIFEST_PATH} was not found.`);
+
+		const files = await response.json();
+		if (!Array.isArray(files)) throw new Error(`${EXAMPLE_MODEL_MANIFEST_PATH} must be a JSON array.`);
+
+		return files
+			.map(fileName => String(fileName || '').trim())
+			.filter(fileName => fileName && fileName.toLowerCase().endsWith('.json'));
+	} catch (error) {
+		console.warn('Dancing5 example model manifest unavailable; using fallback list.', error);
+		return EXAMPLE_MODEL_FILES;
+	}
+}
+
 async function ensureStartupDemoModel() {
 	if (startupDemoLoadStarted) return;
 	startupDemoLoadStarted = true;
 
 	try {
-		await importDemoModelFromPath('Startup demo model', {
-			activate: false,
-			applySettings: false,
-			skipPopulate: true
-		});
+		const exampleModelFiles = await getExampleModelFiles();
+		const existingModels = await getAllModelRecords();
+		const existingNames = new Set(existingModels.map(model => model.name));
+		for (const fileName of exampleModelFiles) {
+			if (existingNames.has(fileName)) continue;
+
+			await importDemoModelFromPath(`Startup example ${getModelDisplayName(fileName)}`, {
+				activate: false,
+				applySettings: false,
+				skipPopulate: true,
+				modelPath: `examples/${fileName}`,
+				modelNameOverride: fileName
+			});
+			existingNames.add(fileName);
+		}
 	} catch (error) {
 		console.error('Dancing5 startup demo ensure failed.', error);
 		setModelJsonStatus(`Startup demo failed: ${error.message || error}`, true);
@@ -2886,56 +3202,64 @@ document.getElementById('model-select').addEventListener('change', function(even
 		// return;
     // }
 
-        loadModel(selectedModelName);
+        loadModel(selectedModelName).catch(error => console.error('Error loading selected model:', error));
     
 });
 
  
 function loadModel(modelName) {
-	const transaction = db.transaction(['models'], 'readonly');
-	const objectStore = transaction.objectStore('models');
-	const request = objectStore.get(modelName);
+	return new Promise((resolve, reject) => {
+		const transaction = db.transaction(['models'], 'readonly');
+		const objectStore = transaction.objectStore('models');
+		const request = objectStore.get(modelName);
 
-	request.onsuccess = function(event) {
-		const model = event.target.result;
-		if (model) {
-		
-		network = new brain.NeuralNetwork();
-        network.fromJSON(model.data);
-		currentModelName = modelName;
-		rememberLastModelName(modelName);
-		
-			console.log( network );	
-			
-		let idx = validations.indexOf( network.trainOpts.activation  );	
-		document.getElementById("validation-select").selectedIndex 	= idx;
-			
-		let arrHidden = network.sizes;
-		let len = arrHidden.length;		
-		
-		if(len > 2)document.getElementById("hidden-layer-1").value = arrHidden[1];
-		else document.getElementById("hidden-layer-1").value = 0;
-		
-		if(len > 3)document.getElementById("hidden-layer-2").value = arrHidden[2];		
-		else document.getElementById("hidden-layer-2").value = 0;		
-		
-		if(len > 4)document.getElementById("hidden-layer-3").value = arrHidden[3];
-		else document.getElementById("hidden-layer-3").value = 0;		
-		
-		if(len > 5)document.getElementById("hidden-layer-4").value = arrHidden[4];		
-		else document.getElementById("hidden-layer-4").value = 0;		
-		
-			//network = model.data; // Modify as per your actual initialization
-			
-			//console.log(`Model ${modelName} loaded into network.`);
-		} else {
-			console.error(`Model ${modelName} not found.`);
-		}
-	};
+		request.onsuccess = async function(event) {
+			try {
+				const model = event.target.result;
+				if (!model) {
+					console.error(`Model ${modelName} not found.`);
+					resolve(null);
+					return;
+				}
 
-	request.onerror = function(event) {
-		console.error('Error loading model:', event.target.errorCode);
-	};
+				network = new brain.NeuralNetwork();
+				network.fromJSON(model.data);
+				currentModelName = modelName;
+				rememberLastModelName(modelName);
+
+				console.log(network);
+
+				let idx = validations.indexOf(network.trainOpts.activation);
+				document.getElementById("validation-select").selectedIndex = idx;
+
+				let arrHidden = network.sizes;
+				let len = arrHidden.length;
+
+				if(len > 2)document.getElementById("hidden-layer-1").value = arrHidden[1];
+				else document.getElementById("hidden-layer-1").value = 0;
+
+				if(len > 3)document.getElementById("hidden-layer-2").value = arrHidden[2];
+				else document.getElementById("hidden-layer-2").value = 0;
+
+				if(len > 4)document.getElementById("hidden-layer-3").value = arrHidden[3];
+				else document.getElementById("hidden-layer-3").value = 0;
+
+				if(len > 5)document.getElementById("hidden-layer-4").value = arrHidden[4];
+				else document.getElementById("hidden-layer-4").value = 0;
+
+				await applyModelSettings(modelName);
+				await saveLastSession(modelName);
+				resolve(model);
+			} catch (error) {
+				reject(error);
+			}
+		};
+
+		request.onerror = function(event) {
+			console.error('Error loading model:', event.target.errorCode);
+			reject(event.target.error || new Error(event.target.errorCode));
+		};
+	});
 }
 
 let dataName = null;
@@ -2982,10 +3306,24 @@ function getTrainingSettingsSnapshot() {
   };
 }
 
+function getSessionSettingsSnapshot(modelName) {
+  return {
+    modelName: modelName || currentModelName || null,
+    savedAt: new Date().toISOString(),
+    settings: {
+      training: getTrainingSettingsSnapshot(),
+      visual: Object.assign({}, visualSettings),
+      headPictureName: selectedHeadPictureName
+    }
+  };
+}
+
 function applySettingsSnapshot(settings) {
   if (!settings) return;
 
+  if (settings.headPictureName) setCustomHeadPicture(settings.headPictureName);
   if (settings.visual) applyVisualSettings(settings.visual);
+  if (settings.headPictureName) setCustomHeadPicture(settings.headPictureName);
 
   if (settings.training) {
     if (settings.training.activation && validations.includes(settings.training.activation)) {
@@ -3105,6 +3443,60 @@ async function writeModelRecord(modelRecord) {
   });
 }
 
+async function readSettingsRecord(name) {
+  const readyDb = await waitForDbReady();
+
+  return new Promise((resolve, reject) => {
+    if (!readyDb || !name || !readyDb.objectStoreNames.contains(SETTINGS_STORE_NAME)) {
+      resolve(null);
+      return;
+    }
+
+    const transaction = readyDb.transaction([SETTINGS_STORE_NAME], 'readonly');
+    const objectStore = transaction.objectStore(SETTINGS_STORE_NAME);
+    const getRequest = objectStore.get(name);
+
+    getRequest.onsuccess = event => resolve(event.target.result || null);
+    getRequest.onerror = event => reject(event.target.error);
+  });
+}
+
+async function writeSettingsRecord(name, sessionSnapshot) {
+  const readyDb = await waitForDbReady();
+
+  return new Promise((resolve, reject) => {
+    if (!readyDb || !name || !readyDb.objectStoreNames.contains(SETTINGS_STORE_NAME)) {
+      resolve(null);
+      return;
+    }
+
+    const record = Object.assign({ name }, sessionSnapshot || {});
+    const transaction = readyDb.transaction([SETTINGS_STORE_NAME], 'readwrite');
+    const objectStore = transaction.objectStore(SETTINGS_STORE_NAME);
+    const putRequest = objectStore.put(record);
+
+    putRequest.onsuccess = () => resolve(record);
+    putRequest.onerror = event => reject(event.target.error);
+  });
+}
+
+async function saveModelSettings(modelName) {
+  if (!modelName) return null;
+  return writeSettingsRecord(modelName, getSessionSettingsSnapshot(modelName));
+}
+
+async function saveLastSession(modelName = currentModelName) {
+  return writeSettingsRecord(LAST_SESSION_SETTINGS_NAME, getSessionSettingsSnapshot(modelName));
+}
+
+async function applyModelSettings(modelName) {
+  if (!modelName) return false;
+  const settingsRecord = await readSettingsRecord(modelName);
+  if (!settingsRecord || !settingsRecord.settings) return false;
+  applySettingsSnapshot(settingsRecord.settings);
+  return true;
+}
+
 function selectModelInUi(modelName) {
   const modelSelect = document.getElementById('model-select');
   if (!modelSelect || !modelName) return;
@@ -3113,7 +3505,7 @@ function selectModelInUi(modelName) {
   if (!option) {
     option = document.createElement('option');
     option.value = modelName;
-    option.textContent = modelName;
+    option.textContent = getModelDisplayName(modelName);
     modelSelect.appendChild(option);
   }
 
@@ -3151,7 +3543,8 @@ function buildModelExport(modelRecord, modelDataOverride, modelNameOverride) {
     } : null,
     settings: {
       training: getTrainingSettingsSnapshot(),
-      visual: Object.assign({}, visualSettings)
+      visual: Object.assign({}, visualSettings),
+      headPictureName: selectedHeadPictureName
     }
   };
 }
@@ -3284,6 +3677,15 @@ async function importModelExport(data, sourceLabel, options = {}) {
     };
 
     await writeModelRecord(modelRecord);
+    await writeSettingsRecord(modelName, {
+      modelName,
+      savedAt: new Date().toISOString(),
+      settings: normalized.settings || {
+        training: null,
+        visual: Object.assign({}, DEFAULT_VISUAL_SETTINGS),
+        headPictureName: DEFAULT_HEAD_PICTURE.name
+      }
+    });
 
     if (options.activate === false) {
       console.log(`Dancing5 import saved without activating: ${modelName}`);
@@ -3293,6 +3695,7 @@ async function importModelExport(data, sourceLabel, options = {}) {
     network = new brain.NeuralNetwork();
     network.fromJSON(modelRecord.data);
     selectModelInUi(modelName);
+    await saveLastSession(modelName);
     if (!options.skipPopulate) populateModels();
     console.log(`Dancing5 import success: ${modelName}`);
     setModelJsonStatus(`${sourceLabel || 'Import'} loaded "${modelName}".`, false);
@@ -3342,15 +3745,17 @@ async function loadDemoModelJson() {
 }
 
 async function importDemoModelFromPath(sourceLabel, options = {}) {
-  console.log(`Dancing5 demo import from ${DEFAULT_DEMO_MODEL_PATH}`);
-  const response = await fetch(DEFAULT_DEMO_MODEL_PATH, { cache: 'no-store' });
+  const modelPath = options.modelPath || DEFAULT_DEMO_MODEL_PATH;
+  const modelName = options.modelNameOverride || DEFAULT_DEMO_MODEL_NAME;
+  console.log(`Dancing5 demo import from ${modelPath}`);
+  const response = await fetch(modelPath, { cache: 'no-store' });
   if (!response.ok) {
-    throw new Error(`${DEFAULT_DEMO_MODEL_PATH} was not found.`);
+    throw new Error(`${modelPath} was not found.`);
   }
 
   const data = await response.json();
   await importModelExport(data, sourceLabel || 'Demo model', Object.assign({}, options, {
-    modelNameOverride: DEFAULT_DEMO_MODEL_NAME
+    modelNameOverride: modelName
   }));
 }
 
@@ -3404,11 +3809,18 @@ function saveModel() {
     const putRequest = objectStore.put(modelRecord);
 
     // Success handler
-    putRequest.onsuccess = function(event) {
+    putRequest.onsuccess = async function(event) {
         console.log(`Model "${modelName}" saved to IndexedDB with key:`, event.target.result);
-        rememberLastModelName(modelName);
-        alert(`Model "${modelName}" has been saved successfully.`);
-        populateModels(); // Refresh the model select element if needed
+        try {
+            await saveModelSettings(modelName);
+            await saveLastSession(modelName);
+            rememberLastModelName(modelName);
+            alert(`Model "${modelName}" has been saved successfully.`);
+            populateModels(); // Refresh the model select element if needed
+        } catch (error) {
+            console.error('Error saving model settings to IndexedDB:', error);
+            alert(`Model "${modelName}" was saved, but its avatar settings could not be saved.`);
+        }
     };
 
     // Error handler
@@ -3474,26 +3886,25 @@ document.getElementById("moncount").innerHTML = 0;
 
 function flipFull()
 {
- 	
-	if( flagPannel == true )
-	{
-		flagPannel = false;
-		document.getElementById("model-manager").style.display="none";	
-		document.getElementById("canvas-container").style.display="";		
-		document.getElementById("content").style.display="none";				
-		//document.getElementById("fliptrain").innerHTML = "Avatar";		
-	 
-	}
-	else 
-	{
-		//return;
-		flagPannel = true;
-		document.getElementById("model-manager").style.display="";		
-		document.getElementById("canvas-container").style.display="none";		
-		document.getElementById("content").style.display="";					
-		//document.getElementById("fliptrain").innerHTML = "Trainning";
- 
-	}	
+  if( flagPannel == true )
+  {
+    flagPannel = false;
+    setModelManagerVisible(false);
+    document.getElementById("canvas-container").style.display="";
+    document.getElementById("content").style.display="none";
+    //document.getElementById("fliptrain").innerHTML = "Avatar";
+
+  }
+  else
+  {
+    //return;
+    flagPannel = true;
+    setModelManagerVisible(true);
+    document.getElementById("canvas-container").style.display="none";
+    document.getElementById("content").style.display="";
+    //document.getElementById("fliptrain").innerHTML = "Trainning";
+
+  }
  
 }
 

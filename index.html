@@ -31,7 +31,7 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
 <audio id="inputAudio" style="position:fixed; bottom:4px; left:4px; width:35%; display: none;" controls></audio>
 
 
-    <div id="controls" style="position:fixed; left:5px; top:4px; z-index:1010; " >
+    <div id="controls" style="position:fixed; left:5px; top:60px; z-index:1010; display:none; " >
       <!-- <input type="file" id="mediaFileInput" accept="audio/*,video/*"> -->
 	         <label class="custom-file-upload">
             <input type="file"  name="load" id="mediaFileInput" accept="audio/*,video/*">
@@ -84,12 +84,11 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
 	  <!-- <button class="btt1" onclick="learn(1800)">LEARN 1/2H</button> -->
 	  <!-- <button class="btt1" onclick="learn(7200)">LEARN 2H</button>	   -->
 	<!-- </div>	   -->
-	
-<div id="view-controls" style="position:fixed; bottom:5px; left:5px;">
-  <div id="avatar-visual-controls" style="max-width:560px;">
-    <div>
-      <button id="avatar-visual-toggle" type="button" title="Avatar controls" style="width:auto; padding:3px 7px;">&#128125;</button>
     </div>
+	
+<div id="view-controls" style="position:fixed; bottom:5px; left:4px; z-index:1020;">
+  <div id="avatar-visual-controls" style="max-width:560px;">
+
     <div id="avatar-visual-panel" style="margin-top:6px; display:none; gap:14px; align-items:flex-start; flex-wrap:wrap;">
       <div style="width:260px;">
         <label for="rotation-y-slider">Rotation Y:</label>
@@ -114,10 +113,16 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
       <label for="avatar-style-select">Avatar Style:</label>
       <select id="avatar-style-select">
         <option value="robot">Robot</option>
+        <option value="myHead">My Head</option>
         <option value="neon">Neon</option>
         <option value="wire">Wire</option>
         <option value="leSaint">leSaint</option>
       </select>
+      <div id="avatar-head-picture-controls" style="display:none;">
+        <label for="avatar-head-picture-select">Head Picture:</label>
+        <select id="avatar-head-picture-select"></select>
+        <input id="avatar-head-picture-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" style="display:none;">
+      </div>
       <label for="avatar-color-input">Avatar Color:</label>
       <input id="avatar-color-input" type="color" value="#3a5fad">
       <label for="background-mode-select">Background:</label>
@@ -130,19 +135,18 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
       <input id="background-color-input" type="color" value="#000000">
       </div>
     </div>
+	<br>
+	 <div>
+      <button id="avatar-visual-toggle" type="button" title="Avatar controls" style="width:auto; padding:0px; font-size:30px;">&#128125;</button>
+    </div>
   </div>
 </div>
-
-
-		
-    </div>
-
 
     <!-- <div id="models" style="position:fixed; right:5px; top:4px; z-index:1010; " > -->
 	 
   <div id="model-manager"
-   style="position:fixed; right:5px; top:4%;  height:96%;
-   overflow-y:auto; overflow-x:hidden; z-index:1010; ">
+   style="position:fixed; right:5px; top:60px;  height:calc(100% - 120px);
+   overflow-y:auto; overflow-x:hidden; z-index:1010; display:none; ">
    
     
 <div style="display: inline-flex; align-items: center;">  <input id="checklearn" type="checkbox" onchange="checkLearn(this.checked);">
@@ -221,8 +225,16 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
 font-weight:bold; padding-top:0px;  padding-bottom:0px;	border-radius:4px;" onclick="flipFull();">
 &#128125;</div>
 
+	<div id="main-controls-toggle-wrap" style="position:fixed; top:4px; left:5px; z-index:1020;">
+      <button id="main-controls-toggle" class="floating-panel-toggle" type="button" title="Main controls" style="width:auto; padding:0px; font-size:30px;">&#128125;</button>
+    </div>
 
-<div id="monsound" style="position: fixed; right:4px; bottom:4px; width:64px; height:20px; display:flex; align-items:flex-end; gap:0; overflow:hidden;"></div>
+	<div id="model-controls" style="position:fixed; bottom:5px; right:5px;">
+      <button id="model-manager-toggle" class="floating-panel-toggle" type="button" title="Model manager" style="width:auto; padding:0px; font-size:30px;">&#128125;</button>
+    </div>
+
+
+<div id="monsound" style="position: fixed; left:50%; transform:translateX(-50%); bottom:4px; width:128px; height:20px; display:flex; align-items:flex-end; gap:0; overflow:hidden;"></div>
 
 </div>
 

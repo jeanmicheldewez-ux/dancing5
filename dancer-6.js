@@ -79,11 +79,13 @@ const LAST_SESSION_SETTINGS_NAME = '__last-session__';
 const HEAD_PICTURES_STORAGE_KEY = 'Dancing5.headPictures';
 const SELECTED_HEAD_PICTURE_STORAGE_KEY = 'Dancing5.selectedHeadPicture';
 const UPLOAD_HEAD_PICTURE_VALUE = '__upload_head_picture__';
+const HEAD_PICTURE_MANIFEST_PATH = 'pictures/pictures.json';
 const DEFAULT_HEAD_PICTURE = {
   name: 'jmx',
   src: 'pictures/jmx.png',
   builtIn: true
 };
+let builtInHeadPictures = [DEFAULT_HEAD_PICTURE];
 const DEFAULT_VISUAL_SETTINGS = {
   avatarStyle: 'robot',
   avatarColor: '#3a5fad',
@@ -151,6 +153,7 @@ function scheduleLastSessionSave() {
     try {
       if (currentModelName) await saveModelSettings(currentModelName);
       await saveLastSession();
+      updateShareUrlHash();
     } catch (error) {
       console.warn('Could not autosave settings:', error);
     }
@@ -188,9 +191,36 @@ function writeStoredHeadPictures(pictures) {
 
 function getHeadPictures() {
   const stored = readStoredHeadPictures();
-  const byName = new Map([[DEFAULT_HEAD_PICTURE.name, DEFAULT_HEAD_PICTURE]]);
+  const byName = new Map();
+  builtInHeadPictures.forEach(item => byName.set(item.name, item));
   stored.forEach(item => byName.set(item.name, item));
   return Array.from(byName.values());
+}
+
+async function loadBuiltInHeadPictures() {
+  try {
+    const response = await fetch(HEAD_PICTURE_MANIFEST_PATH, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${HEAD_PICTURE_MANIFEST_PATH} was not found.`);
+
+    const files = await response.json();
+    if (!Array.isArray(files)) throw new Error(`${HEAD_PICTURE_MANIFEST_PATH} must be a JSON array.`);
+
+    builtInHeadPictures = files
+      .map(fileName => String(fileName || '').trim())
+      .filter(fileName => /\.(png|jpe?g)$/i.test(fileName))
+      .map(fileName => ({
+        name: getPictureDisplayName(fileName),
+        src: `pictures/${fileName}`,
+        builtIn: true
+      }));
+
+    if (!builtInHeadPictures.some(item => item.name === DEFAULT_HEAD_PICTURE.name)) {
+      builtInHeadPictures.unshift(DEFAULT_HEAD_PICTURE);
+    }
+  } catch (error) {
+    console.warn('Dancing5 picture manifest unavailable; using fallback picture list.', error);
+    builtInHeadPictures = [DEFAULT_HEAD_PICTURE];
+  }
 }
 
 function rememberSelectedHeadPicture(name) {
@@ -267,6 +297,79 @@ function saveUploadedHeadPicture(file) {
   };
   reader.onerror = () => alert('The picture could not be loaded.');
   reader.readAsDataURL(file);
+}
+
+function readUrlShareState() {
+  const rawHash = window.location.hash ? window.location.hash.slice(1) : '';
+  if (!rawHash) return null;
+
+  const params = new URLSearchParams(rawHash);
+  if (![...params.keys()].length) return null;
+
+  const numberValue = key => {
+    const value = parseFloat(params.get(key));
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const state = {
+    modelName: params.get('model') || null,
+    headPictureName: params.get('head') || null,
+    visual: {},
+    camera: {}
+  };
+
+  if (params.get('style')) state.visual.avatarStyle = params.get('style');
+  if (params.get('color')) state.visual.avatarColor = params.get('color');
+  if (params.get('thick')) state.visual.avatarThickness = numberValue('thick');
+  if (params.get('react')) state.visual.musicReactivity = numberValue('react');
+  if (params.get('motion')) state.visual.motionAmount = numberValue('motion');
+  if (params.get('bg')) state.visual.backgroundMode = params.get('bg');
+  if (params.get('bgc')) state.visual.backgroundColor = params.get('bgc');
+  if (params.get('rx')) state.camera.rotationX = numberValue('rx');
+  if (params.get('ry')) state.camera.rotationY = numberValue('ry');
+  if (params.get('zoom')) state.camera.zoom = numberValue('zoom');
+
+  return state;
+}
+
+function applyUrlShareState(state) {
+  if (!state) return;
+
+  if (state.headPictureName) setCustomHeadPicture(state.headPictureName);
+  if (state.visual && Object.keys(state.visual).length) applyVisualSettings(state.visual);
+  if (state.headPictureName) setCustomHeadPicture(state.headPictureName);
+  if (typeof state.camera.rotationX === 'number') {
+    updateRotationX(state.camera.rotationX);
+    const slider = document.getElementById('rotation-x-slider');
+    if (slider) slider.value = state.camera.rotationX;
+  }
+  if (typeof state.camera.rotationY === 'number') {
+    updateRotationY(state.camera.rotationY);
+    const slider = document.getElementById('rotation-y-slider');
+    if (slider) slider.value = state.camera.rotationY;
+  }
+  if (typeof state.camera.zoom === 'number') {
+    updateZoom(state.camera.zoom);
+    const slider = document.getElementById('zoom-slider');
+    if (slider) slider.value = state.camera.zoom;
+  }
+}
+
+function updateShareUrlHash() {
+  const params = new URLSearchParams();
+  if (currentModelName) params.set('model', currentModelName);
+  params.set('style', visualSettings.avatarStyle);
+  params.set('head', selectedHeadPictureName);
+  params.set('color', visualSettings.avatarColor);
+  params.set('thick', visualSettings.avatarThickness);
+  params.set('react', visualSettings.musicReactivity);
+  params.set('motion', visualSettings.motionAmount);
+  params.set('bg', visualSettings.backgroundMode);
+  params.set('bgc', visualSettings.backgroundColor);
+  params.set('rx', cameraAngleX);
+  params.set('ry', cameraAngleY);
+  params.set('zoom', zoom);
+  history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params.toString()}`);
 }
  
 // learningRateInput.addEventListener('input', updateLearningRateDisplay);
@@ -1527,6 +1630,11 @@ setupHumanOverlay();
 updateSelectedHumanLabel();
 setHumanSelectorControlsVisible(false);
 initSoundMeter();
+
+window.addEventListener('load', () => {
+  setMicCheckboxChecked(true);
+  flipMike(true);
+});
  
 
 mediaFileInput.addEventListener('change', function(event) {
@@ -3047,8 +3155,11 @@ async function populateModels() {
 	selecto.innerHTML = '';
 
 	try {
+		await loadBuiltInHeadPictures();
+		initializeHeadPictureSelect();
 		await ensureStartupDemoModel();
 		const models = await getAllModelRecords();
+		const shareState = readUrlShareState();
 		selecto.innerHTML = '';
 
 		models.forEach(model => {
@@ -3058,6 +3169,20 @@ async function populateModels() {
 			selecto.appendChild(option);
 		});
 
+		const shareModelExists = shareState && shareState.modelName && models.some(model => model.name === shareState.modelName);
+		if (shareModelExists) {
+			selecto.value = shareState.modelName;
+			await loadModel(shareState.modelName);
+			applyUrlShareState(shareState);
+			await saveLastSession(shareState.modelName);
+			updateShareUrlHash();
+			return;
+		}
+
+		if (shareState) {
+			applyUrlShareState(shareState);
+		}
+
 		if (currentModelName && Array.from(selecto.options).some(option => option.value === currentModelName)) {
 			selecto.value = currentModelName;
 			return;
@@ -3065,7 +3190,7 @@ async function populateModels() {
 
 		const lastSession = await readSettingsRecord(LAST_SESSION_SETTINGS_NAME);
 		const lastSessionModelName = lastSession && lastSession.modelName ? lastSession.modelName : null;
-		const lastModelName = lastSessionModelName || getLastModelName();
+		const lastModelName = shareState ? null : (lastSessionModelName || getLastModelName());
 		const lastModelExists = lastModelName && models.some(model => model.name === lastModelName);
 
 		if (lastModelExists) {

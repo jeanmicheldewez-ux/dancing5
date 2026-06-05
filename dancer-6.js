@@ -3196,6 +3196,9 @@ async function populateModels() {
 		if (lastModelExists) {
 			selecto.value = lastModelName;
 			await loadModel(lastModelName);
+			if (lastSession && lastSession.settings) {
+				applySettingsSnapshot(lastSession.settings);
+			}
 			return;
 		}
 
@@ -3372,7 +3375,6 @@ function loadModel(modelName) {
 				if(len > 5)document.getElementById("hidden-layer-4").value = arrHidden[4];
 				else document.getElementById("hidden-layer-4").value = 0;
 
-				await applyModelSettings(modelName);
 				await saveLastSession(modelName);
 				resolve(model);
 			} catch (error) {

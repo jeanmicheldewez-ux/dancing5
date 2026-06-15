@@ -24,6 +24,13 @@
 	<link rel="icon" type="image/x-icon" href="favicon.ico" />	
    <link rel="stylesheet" href="dancer.css">
   <script src="https://cdn.jsdelivr.net/npm/meyda@5.6.3/dist/web/meyda.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs"
+      }
+    }
+  </script>
   
   <script src="camera_utils.js" crossorigin="anonymous"></script>
   <script src="pose.js" crossorigin="anonymous"></script>
@@ -120,17 +127,23 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
         <label for="avatar-thickness-slider">Thickness:</label>
         <input type="range" id="avatar-thickness-slider" min="0.4" max="2.4" step="0.05" value="1">
 
+        <label for="avatar-head-scale-slider">Head Size:</label>
+        <input type="range" id="avatar-head-scale-slider" min="0.65" max="2.4" step="0.01" value="1">
+
         <label for="music-reactivity-slider">Reactivity:</label>
         <input type="range" id="music-reactivity-slider" min="0" max="100" step="1" value="50">
 
         <label for="motion-amount-slider">Motion:</label>
         <input type="range" id="motion-amount-slider" min="0" max="100" step="1" value="50">
+
+        <label for="audio-input-gain-slider">Analysis Input: <span id="audio-input-gain-value">1.00</span></label>
+        <input type="range" id="audio-input-gain-slider" min="0" max="3" step="0.01" value="1">
       </div>
       <div style="width:180px;">
       <label for="avatar-style-select">Avatar Style:</label>
       <select id="avatar-style-select">
         <option value="robot">Robot</option>
-        <option value="myHead">My Head</option>
+        <option value="myHead">My Head &#129489;</option>
         <option value="neon">Neon</option>
         <option value="wire">Wire</option>
         <option value="leSaint">leSaint</option>
@@ -138,7 +151,9 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
       <div id="avatar-head-picture-controls" style="display:none;">
         <label for="avatar-head-picture-select">Head Picture:</label>
         <select id="avatar-head-picture-select"></select>
-        <input id="avatar-head-picture-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" style="display:none;">
+        <button id="avatar-head-picture-upload-btn" type="button">Add Avatar Head</button>
+        <div id="avatar-head-picture-status" aria-live="polite"></div>
+        <input id="avatar-head-picture-input" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none;">
       </div>
       <label for="avatar-color-input">Avatar Color:</label>
       <input id="avatar-color-input" type="color" value="#3a5fad">
@@ -255,6 +270,38 @@ font-weight:bold; padding-top:0px;  padding-bottom:0px;	border-radius:4px;" oncl
 
 </div>
 
+<div id="face-image-processing-overlay" class="face-image-processing-overlay" aria-hidden="true">
+  <div class="face-image-processing-box" role="status" aria-live="assertive">
+    <div class="face-image-processing-gif" aria-hidden="true"></div>
+    <div class="face-image-processing-title">Detouring image treatment</div>
+    <div class="face-image-processing-message">Your computer is extracting the face and hair. This can take a moment.</div>
+  </div>
+</div>
+
+<div id="face-image-preview-modal" class="face-image-preview-modal" aria-hidden="true">
+  <div class="face-image-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="face-image-preview-title">
+    <h2 id="face-image-preview-title">Avatar Head Image</h2>
+    <div class="face-image-preview-grid">
+      <div>
+        <label>Original</label>
+        <img id="face-image-original-preview" alt="Original selected portrait preview">
+      </div>
+      <div>
+        <label>Cutout</label>
+        <img id="face-image-cutout-preview" alt="Extracted transparent head preview">
+      </div>
+    </div>
+    <label for="face-image-name-input">Name</label>
+    <input id="face-image-name-input" type="text" maxlength="80" autocomplete="off">
+    <div id="face-image-preview-status" aria-live="polite"></div>
+    <div class="face-image-preview-actions">
+      <button id="face-image-save-btn" type="button">Save / Use this avatar image</button>
+      <button id="face-image-download-btn" type="button">Download PNG</button>
+      <button id="face-image-cancel-btn" type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
@@ -306,6 +353,7 @@ font-weight:bold; padding-top:0px;  padding-bottom:0px;	border-radius:4px;" oncl
 </script>
 
    <script  src="brain.js"></script>
+  <script src="integrations/faceHairCutoutAdapter.js"></script>
   <script  src="dancer-6.js"></script>	
 </body>
 </html>

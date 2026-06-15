@@ -12,9 +12,10 @@ The export button writes a `.json` file containing:
 - model name,
 - Brain.js model data,
 - training/view settings,
-- visual settings.
+- visual settings,
+- selected custom avatar head image data when the selected head is a saved cutout image.
 
-Visual settings include avatar style, color, thickness, reactivity, motion amount, and background settings.
+Visual settings include avatar style, color, thickness, reactivity, motion amount, background settings, and selected head-image references. When the selected head is a saved `face-hair-cutout-js` cutout, export embeds that PNG record under `avatarImages` so the file can be imported in another browser.
 
 ## Import
 
@@ -23,8 +24,9 @@ The import flow:
 1. Reads a user-selected `.json` file.
 2. Validates that it looks like a Dancing5 model/settings file.
 3. Saves model data into IndexedDB store `models`.
-4. Activates the imported model when safe.
-5. Refreshes the model dropdown.
+4. Restores embedded avatar images into the local `avatarImages` store.
+5. Activates the imported model when safe.
+6. Refreshes the model dropdown.
 
 ## Startup Demo
 
@@ -52,5 +54,11 @@ Local model records use IndexedDB:
 - Store: `models`
 - Key: `name`
 - Data: Brain.js `NeuralNetwork.toJSON()`
+
+Custom cutout avatar head records use:
+
+- Store: `avatarImages`
+- Key: `id`
+- Data: `{ id, name, dataUrl, width, height, createdAt, source, metadata }`
 
 The last loaded/saved model preference is stored in `localStorage` under `Dancing5.lastModelName`.

@@ -22,6 +22,7 @@ The public demo imports example models from `examples/models.json` on startup so
 - Neural-network based dancer behavior.
 - Import/export JSON dancer models.
 - Avatar style, color, thickness, reactivity, motion, and background settings.
+- Custom avatar head images through the `face-hair-cutout-js` adapter.
 - Local browser persistence through IndexedDB.
 - Future BOW/WATTOO/VJ integration path.
 
@@ -69,6 +70,8 @@ Saved models live in browser IndexedDB:
 - Store: `models`
 - Model record shape: `{ name, data, createdAt, importedAt }`
 - `data`: Brain.js `NeuralNetwork.toJSON()` output
+
+Custom cutout avatar heads use IndexedDB store `avatarImages` when available, with a small `localStorage` fallback. See `docs/FACE_IMAGE_UPLOAD.md`.
 
 Exported model JSON files are intended to be shareable demo assets and future repository examples.
 

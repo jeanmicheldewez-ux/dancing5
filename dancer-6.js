@@ -50,11 +50,25 @@ const modelJsonStatus = document.getElementById('model-json-status');
 const avatarStyleSelect = document.getElementById('avatar-style-select');
 const avatarHeadPictureControls = document.getElementById('avatar-head-picture-controls');
 const avatarHeadPictureSelect = document.getElementById('avatar-head-picture-select');
+const avatarHeadPictureUploadBtn = document.getElementById('avatar-head-picture-upload-btn');
+const avatarHeadPictureStatus = document.getElementById('avatar-head-picture-status');
 const avatarHeadPictureInput = document.getElementById('avatar-head-picture-input');
+const faceImageProcessingOverlay = document.getElementById('face-image-processing-overlay');
+const faceImagePreviewModal = document.getElementById('face-image-preview-modal');
+const faceImageOriginalPreview = document.getElementById('face-image-original-preview');
+const faceImageCutoutPreview = document.getElementById('face-image-cutout-preview');
+const faceImageNameInput = document.getElementById('face-image-name-input');
+const faceImagePreviewStatus = document.getElementById('face-image-preview-status');
+const faceImageSaveBtn = document.getElementById('face-image-save-btn');
+const faceImageDownloadBtn = document.getElementById('face-image-download-btn');
+const faceImageCancelBtn = document.getElementById('face-image-cancel-btn');
 const avatarColorInput = document.getElementById('avatar-color-input');
 const avatarThicknessSlider = document.getElementById('avatar-thickness-slider');
+const avatarHeadScaleSlider = document.getElementById('avatar-head-scale-slider');
 const musicReactivitySlider = document.getElementById('music-reactivity-slider');
 const motionAmountSlider = document.getElementById('motion-amount-slider');
+const audioInputGainSlider = document.getElementById('audio-input-gain-slider');
+const audioInputGainValue = document.getElementById('audio-input-gain-value');
 const backgroundModeSelect = document.getElementById('background-mode-select');
 const backgroundColorInput = document.getElementById('background-color-input');
 const avatarVisualToggle = document.getElementById('avatar-visual-toggle');
@@ -75,11 +89,13 @@ const EXAMPLE_MODEL_FILES = [
 ];
 const LAST_MODEL_STORAGE_KEY = 'Dancing5.lastModelName';
 const SETTINGS_STORE_NAME = 'settings';
+const AVATAR_IMAGES_STORE_NAME = 'avatarImages';
 const LAST_SESSION_SETTINGS_NAME = '__last-session__';
 const HEAD_PICTURES_STORAGE_KEY = 'Dancing5.headPictures';
+const AVATAR_IMAGES_FALLBACK_STORAGE_KEY = 'Dancing5.avatarImages';
 const SELECTED_HEAD_PICTURE_STORAGE_KEY = 'Dancing5.selectedHeadPicture';
-const UPLOAD_HEAD_PICTURE_VALUE = '__upload_head_picture__';
 const HEAD_PICTURE_MANIFEST_PATH = 'pictures/pictures.json';
+const FACE_IMAGE_EXTRACTION_TIMEOUT_MS = 30000;
 const DEFAULT_HEAD_PICTURE = {
   name: 'jmx',
   src: 'pictures/jmx.png',
@@ -90,6 +106,7 @@ const DEFAULT_VISUAL_SETTINGS = {
   avatarStyle: 'robot',
   avatarColor: '#3a5fad',
   avatarThickness: 1,
+  avatarHeadScale: 1,
   musicReactivity: 50,
   motionAmount: 50,
   backgroundMode: 'none',
@@ -98,6 +115,9 @@ const DEFAULT_VISUAL_SETTINGS = {
 let visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS);
 const CUSTOM_HEAD_IMAGE = new Image();
 let selectedHeadPictureName = DEFAULT_HEAD_PICTURE.name;
+let avatarImageCache = [];
+let pendingFaceImageResult = null;
+let faceImageExtractionInProgress = false;
 
 function setMainControlsVisible(visible) {
   if (mainControls) mainControls.style.display = visible ? '' : 'none';
@@ -165,7 +185,40 @@ function getModelDisplayName(modelName) {
 }
 
 function getPictureDisplayName(fileName) {
-  return String(fileName || '').replace(/\.(png|jpe?g)$/i, '');
+  return String(fileName || '').replace(/\.(png|jpe?g|webp)$/i, '');
+}
+
+function setHeadPictureStatus(message, isError) {
+  if (!avatarHeadPictureStatus) return;
+  avatarHeadPictureStatus.textContent = message || '';
+  avatarHeadPictureStatus.style.color = isError ? '#ff4400' : '#00cc66';
+}
+
+function setFaceImagePreviewStatus(message, isError) {
+  if (!faceImagePreviewStatus) return;
+  faceImagePreviewStatus.textContent = message || '';
+  faceImagePreviewStatus.style.color = isError ? '#ff4400' : '#00cc66';
+}
+
+function setFaceImageProcessingVisible(visible) {
+  if (!faceImageProcessingOverlay) return;
+  faceImageProcessingOverlay.classList.toggle('is-visible', !!visible);
+  faceImageProcessingOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function normalizeAvatarImageRecord(record) {
+  if (!record || !record.dataUrl) return null;
+  const id = record.id || `avatar-head-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    id,
+    name: String(record.name || id).trim() || id,
+    dataUrl: record.dataUrl,
+    width: parseInt(record.width, 10) || 0,
+    height: parseInt(record.height, 10) || 0,
+    createdAt: record.createdAt || new Date().toISOString(),
+    source: record.source || 'face-hair-cutout-js',
+    metadata: record.metadata || {}
+  };
 }
 
 function readStoredHeadPictures() {
@@ -189,11 +242,111 @@ function writeStoredHeadPictures(pictures) {
   }
 }
 
+function readFallbackAvatarImages() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AVATAR_IMAGES_FALLBACK_STORAGE_KEY) || '[]');
+    return Array.isArray(saved)
+      ? saved.map(normalizeAvatarImageRecord).filter(Boolean)
+      : [];
+  } catch (error) {
+    console.warn('Could not read fallback avatar images:', error);
+    return [];
+  }
+}
+
+function writeFallbackAvatarImages(records) {
+  localStorage.setItem(AVATAR_IMAGES_FALLBACK_STORAGE_KEY, JSON.stringify(records));
+}
+
+async function readAllAvatarImageRecords() {
+  const readyDb = await waitForDbReady().catch(() => null);
+  if (!readyDb || !readyDb.objectStoreNames.contains(AVATAR_IMAGES_STORE_NAME)) {
+    return readFallbackAvatarImages();
+  }
+
+  return new Promise(resolve => {
+    const transaction = readyDb.transaction([AVATAR_IMAGES_STORE_NAME], 'readonly');
+    const objectStore = transaction.objectStore(AVATAR_IMAGES_STORE_NAME);
+    const request = objectStore.getAll();
+    request.onsuccess = event => resolve((event.target.result || []).map(normalizeAvatarImageRecord).filter(Boolean));
+    request.onerror = event => {
+      console.warn('Could not read avatar images from IndexedDB:', event.target.error);
+      resolve(readFallbackAvatarImages());
+    };
+  });
+}
+
+async function writeAvatarImageRecord(record) {
+  const normalized = normalizeAvatarImageRecord(record);
+  if (!normalized) throw new Error('The avatar image record is invalid.');
+
+  const readyDb = await waitForDbReady().catch(() => null);
+  if (!readyDb || !readyDb.objectStoreNames.contains(AVATAR_IMAGES_STORE_NAME)) {
+    const records = readFallbackAvatarImages().filter(item => item.id !== normalized.id);
+    records.push(normalized);
+    writeFallbackAvatarImages(records);
+    return normalized;
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = readyDb.transaction([AVATAR_IMAGES_STORE_NAME], 'readwrite');
+    const objectStore = transaction.objectStore(AVATAR_IMAGES_STORE_NAME);
+    const request = objectStore.put(normalized);
+    request.onsuccess = () => resolve(normalized);
+    request.onerror = event => reject(event.target.error);
+  });
+}
+
+async function readAvatarImageRecord(id) {
+  if (!id) return null;
+  const readyDb = await waitForDbReady().catch(() => null);
+  if (!readyDb || !readyDb.objectStoreNames.contains(AVATAR_IMAGES_STORE_NAME)) {
+    return readFallbackAvatarImages().find(item => item.id === id) || null;
+  }
+
+  return new Promise(resolve => {
+    const transaction = readyDb.transaction([AVATAR_IMAGES_STORE_NAME], 'readonly');
+    const objectStore = transaction.objectStore(AVATAR_IMAGES_STORE_NAME);
+    const request = objectStore.get(id);
+    request.onsuccess = event => resolve(normalizeAvatarImageRecord(event.target.result) || null);
+    request.onerror = event => {
+      console.warn('Could not read avatar image from IndexedDB:', event.target.error);
+      resolve(readFallbackAvatarImages().find(item => item.id === id) || null);
+    };
+  });
+}
+
+async function readSelectedAvatarImageForExport() {
+  const selectedRecord = avatarImageCache.find(item => item.id === selectedHeadPictureName) ||
+    await readAvatarImageRecord(selectedHeadPictureName);
+  return selectedRecord || null;
+}
+
+async function refreshAvatarImageCache() {
+  avatarImageCache = await readAllAvatarImageRecords();
+  populateHeadPictureSelect();
+  return avatarImageCache;
+}
+
 function getHeadPictures() {
   const stored = readStoredHeadPictures();
   const byName = new Map();
   builtInHeadPictures.forEach(item => byName.set(item.name, item));
   stored.forEach(item => byName.set(item.name, item));
+  avatarImageCache.forEach(item => {
+    byName.set(item.id, {
+      name: item.name,
+      value: item.id,
+      src: item.dataUrl,
+      dataUrl: item.dataUrl,
+      width: item.width,
+      height: item.height,
+      createdAt: item.createdAt,
+      source: item.source,
+      metadata: item.metadata,
+      storedAvatarImage: true
+    });
+  });
   return Array.from(byName.values());
 }
 
@@ -233,9 +386,9 @@ function rememberSelectedHeadPicture(name) {
 
 function setCustomHeadPicture(name) {
   const pictures = getHeadPictures();
-  const picture = pictures.find(item => item.name === name) || DEFAULT_HEAD_PICTURE;
-  selectedHeadPictureName = picture.name;
-  CUSTOM_HEAD_IMAGE.src = picture.src;
+  const picture = pictures.find(item => item.value === name || item.id === name || item.name === name) || DEFAULT_HEAD_PICTURE;
+  selectedHeadPictureName = picture.value || picture.id || picture.name;
+  CUSTOM_HEAD_IMAGE.src = picture.dataUrl || picture.src;
   rememberSelectedHeadPicture(selectedHeadPictureName);
   if (avatarHeadPictureSelect) avatarHeadPictureSelect.value = selectedHeadPictureName;
 }
@@ -248,16 +401,10 @@ function populateHeadPictureSelect() {
 
   getHeadPictures().forEach(picture => {
     const option = document.createElement('option');
-    option.value = picture.name;
+    option.value = picture.value || picture.id || picture.name;
     option.textContent = picture.name;
     avatarHeadPictureSelect.appendChild(option);
   });
-
-  const uploadOption = document.createElement('option');
-  uploadOption.value = UPLOAD_HEAD_PICTURE_VALUE;
-  uploadOption.textContent = 'UPLOAD';
-  uploadOption.className = 'avatar-head-upload-option';
-  avatarHeadPictureSelect.appendChild(uploadOption);
 
   const hasPrevious = Array.from(avatarHeadPictureSelect.options).some(option => option.value === previousValue);
   avatarHeadPictureSelect.value = hasPrevious ? previousValue : DEFAULT_HEAD_PICTURE.name;
@@ -274,29 +421,156 @@ function initializeHeadPictureSelect() {
   setCustomHeadPicture(savedName);
 }
 
-function saveUploadedHeadPicture(file) {
-  if (!file) return;
-  if (!/^image\/(png|jpeg)$/.test(file.type)) {
-    alert('Please choose a PNG or JPG picture.');
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('The picture could not be loaded.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise])
+    .finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    });
+}
+
+function openFaceImagePreview(file, result, originalDataUrl) {
+  pendingFaceImageResult = {
+    file,
+    result,
+    originalDataUrl
+  };
+  if (faceImageOriginalPreview) faceImageOriginalPreview.src = originalDataUrl || '';
+  if (faceImageCutoutPreview) faceImageCutoutPreview.src = result.dataUrl;
+  if (faceImageNameInput) {
+    faceImageNameInput.value = getPictureDisplayName(file && file.name ? file.name : '') || 'avatar-head';
+    setTimeout(() => faceImageNameInput.focus(), 0);
+  }
+  setFaceImagePreviewStatus(`${result.width || '?'} x ${result.height || '?'} transparent PNG ready.`, false);
+  if (faceImagePreviewModal) {
+    faceImagePreviewModal.classList.add('is-visible');
+    faceImagePreviewModal.setAttribute('aria-hidden', 'false');
+  }
+}
+
+function closeFaceImagePreview() {
+  pendingFaceImageResult = null;
+  if (faceImagePreviewModal) {
+    faceImagePreviewModal.classList.remove('is-visible');
+    faceImagePreviewModal.setAttribute('aria-hidden', 'true');
+  }
+  if (faceImageOriginalPreview) faceImageOriginalPreview.removeAttribute('src');
+  if (faceImageCutoutPreview) faceImageCutoutPreview.removeAttribute('src');
+  setFaceImagePreviewStatus('', false);
+}
+
+async function savePendingFaceImage() {
+  if (!pendingFaceImageResult || !pendingFaceImageResult.result) return;
+
+  const cleanName = String(faceImageNameInput && faceImageNameInput.value ? faceImageNameInput.value : '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!cleanName) {
+    setFaceImagePreviewStatus('Enter a name before saving.', true);
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = () => {
-    const name = getPictureDisplayName(file.name) || 'custom-head';
-    const pictures = readStoredHeadPictures().filter(item => item.name !== name);
-    pictures.push({ name, src: reader.result });
-    writeStoredHeadPictures(pictures);
-    selectedHeadPictureName = name;
-    populateHeadPictureSelect();
-    setCustomHeadPicture(name);
+  const result = pendingFaceImageResult.result;
+  const record = {
+    id: `avatar-head-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: cleanName,
+    dataUrl: result.dataUrl,
+    width: result.width,
+    height: result.height,
+    createdAt: new Date().toISOString(),
+    source: 'face-hair-cutout-js',
+    metadata: Object.assign({}, result.metadata || {}, {
+      originalFileName: pendingFaceImageResult.file ? pendingFaceImageResult.file.name : null,
+      originalFileType: pendingFaceImageResult.file ? pendingFaceImageResult.file.type : null
+    })
+  };
+
+  try {
+    setFaceImagePreviewStatus('Saving...', false);
+    const saved = await writeAvatarImageRecord(record);
+    await refreshAvatarImageCache();
+    setCustomHeadPicture(saved.id);
     if (avatarStyleSelect) {
       avatarStyleSelect.value = 'myHead';
       readVisualSettingsFromControls();
     }
-  };
-  reader.onerror = () => alert('The picture could not be loaded.');
-  reader.readAsDataURL(file);
+    scheduleLastSessionSave();
+    setHeadPictureStatus(`Saved "${saved.name}".`, false);
+    closeFaceImagePreview();
+  } catch (error) {
+    console.error('Could not save avatar head image:', error);
+    setFaceImagePreviewStatus(`Save failed: ${error.message || error}`, true);
+  }
+}
+
+function downloadPendingFaceImage() {
+  if (!pendingFaceImageResult || !pendingFaceImageResult.result) return;
+  const name = safeFilePart(faceImageNameInput && faceImageNameInput.value ? faceImageNameInput.value : 'avatar-head');
+  const link = document.createElement('a');
+  link.href = pendingFaceImageResult.result.dataUrl;
+  link.download = `${name}.png`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function saveUploadedHeadPicture(file) {
+  if (!file) return;
+  if (faceImageExtractionInProgress) {
+    setHeadPictureStatus('Image treatment is already running.', false);
+    return;
+  }
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type || '')) {
+    setHeadPictureStatus('Invalid file. Choose a PNG, JPG, or WebP image.', true);
+    return;
+  }
+
+  const adapter = window.FaceHairCutoutAdapter;
+  if (!adapter || typeof adapter.processUploadedFaceImage !== 'function') {
+    setHeadPictureStatus('The face-hair-cutout-js adapter is not loaded.', true);
+    return;
+  }
+
+  try {
+    faceImageExtractionInProgress = true;
+    if (avatarHeadPictureUploadBtn) avatarHeadPictureUploadBtn.disabled = true;
+    if (avatarHeadPictureSelect) avatarHeadPictureSelect.disabled = true;
+    setFaceImageProcessingVisible(true);
+    setHeadPictureStatus('Extracting face and hair...', false);
+    const originalDataUrl = await readFileAsDataUrl(file);
+    const result = await withTimeout(
+      adapter.processUploadedFaceImage(file),
+      FACE_IMAGE_EXTRACTION_TIMEOUT_MS,
+      'Impossible to detour this picture. Try a smaller or clearer portrait image.'
+    );
+    if (!result || !result.dataUrl) {
+      setHeadPictureStatus('Extraction failed: no cutout was returned.', true);
+      return;
+    }
+    setHeadPictureStatus('Review the extracted head before saving.', false);
+    openFaceImagePreview(file, result, originalDataUrl);
+  } catch (error) {
+    console.error('Face image extraction failed:', error);
+    setHeadPictureStatus(error.message || 'Extraction failed.', true);
+  } finally {
+    faceImageExtractionInProgress = false;
+    if (avatarHeadPictureUploadBtn) avatarHeadPictureUploadBtn.disabled = false;
+    if (avatarHeadPictureSelect) avatarHeadPictureSelect.disabled = false;
+    setFaceImageProcessingVisible(false);
+  }
 }
 
 function readUrlShareState() {
@@ -321,6 +595,7 @@ function readUrlShareState() {
   if (params.get('style')) state.visual.avatarStyle = params.get('style');
   if (params.get('color')) state.visual.avatarColor = params.get('color');
   if (params.get('thick')) state.visual.avatarThickness = numberValue('thick');
+  if (params.get('headScale')) state.visual.avatarHeadScale = numberValue('headScale');
   if (params.get('react')) state.visual.musicReactivity = numberValue('react');
   if (params.get('motion')) state.visual.motionAmount = numberValue('motion');
   if (params.get('bg')) state.visual.backgroundMode = params.get('bg');
@@ -362,6 +637,7 @@ function updateShareUrlHash() {
   params.set('head', selectedHeadPictureName);
   params.set('color', visualSettings.avatarColor);
   params.set('thick', visualSettings.avatarThickness);
+  params.set('headScale', visualSettings.avatarHeadScale);
   params.set('react', visualSettings.musicReactivity);
   params.set('motion', visualSettings.motionAmount);
   params.set('bg', visualSettings.backgroundMode);
@@ -726,6 +1002,8 @@ let microphoneStream = null;
 let analyzer = null;
 let gainNode = null;
 let micAnalysisGainNode = null;
+let analysisGainNode = null;
+let audioInputGain = 1;
 let lastAudioLevelLogAt = 0;
 let soundMeterBars = [];
  
@@ -740,6 +1018,19 @@ function initAudioContext() {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
   return audioContext;
+}
+
+function normalizeAudioInputGain(value) {
+  const numberValue = parseFloat(value);
+  return Number.isFinite(numberValue) ? clamp(numberValue, 0, 3) : 1;
+}
+
+function updateAudioInputGain(value) {
+  audioInputGain = normalizeAudioInputGain(value);
+  if (audioInputGainSlider) audioInputGainSlider.value = audioInputGain;
+  if (audioInputGainValue) audioInputGainValue.textContent = audioInputGain.toFixed(2);
+  if (analysisGainNode) analysisGainNode.gain.value = audioInputGain;
+  console.log(`Audio input gain changed: ${audioInputGain.toFixed(2)}`);
 }
 
 function resumeAudioContext(context, label) {
@@ -829,6 +1120,9 @@ function initVideoAudio(mediaPlayer) {
     if (analyzer) {
       analyzer.disconnect();
     }
+    if (analysisGainNode) {
+      analysisGainNode.disconnect();
+    }
     if (gainNode) {
       gainNode.disconnect();
     }
@@ -876,6 +1170,11 @@ function cleanupAudio() {
     gainNode = null;
   }
 
+  if (analysisGainNode) {
+    try { analysisGainNode.disconnect(); } catch(e) {}
+    analysisGainNode = null;
+  }
+
   if (micAnalysisGainNode) {
     try { micAnalysisGainNode.disconnect(); } catch(e) {}
     micAnalysisGainNode = null;
@@ -918,39 +1217,36 @@ function initAnalyzer(source) {
   
   // Short delay to ensure previous loop is stopped
   setTimeout(() => {
+    try { source.disconnect(); } catch(e) {}
     if (analyzer) analyzer.disconnect();
+    if (analysisGainNode) analysisGainNode.disconnect();
     if (gainNode) gainNode.disconnect();
     if (micAnalysisGainNode) micAnalysisGainNode.disconnect();
     micAnalysisGainNode = null;
+    analysisGainNode = null;
     
     console.log(`AudioContext state before analyser setup: ${audioContext.state}`);
 
     analyzer = audioContext.createAnalyser();
     analyzer.fftSize = 512;
     analyzer.smoothingTimeConstant = 0.785;
-    
+
+    analysisGainNode = audioContext.createGain();
+    analysisGainNode.gain.value = audioInputGain;
+
     gainNode = audioContext.createGain();
     gainNode.gain.value = 1;
-    
-    // Connect new nodes. Microphone gets analysis gain only, never speaker output.
+
+    source.connect(analysisGainNode);
+    analysisGainNode.connect(analyzer);
+
     if (isMicrophoneActive) {
-      micAnalysisGainNode = audioContext.createGain();
-      micAnalysisGainNode.gain.value = 4;
-      source.connect(micAnalysisGainNode);
-      micAnalysisGainNode.connect(analyzer);
-      console.log(`Microphone analyser connected with analysis gain ${micAnalysisGainNode.gain.value}`);
+      console.log(`Mic analysis path connected with input gain ${audioInputGain.toFixed(2)}`);
     } else {
-      source.connect(analyzer);
-      console.log("Media analyser connected");
-    }
-    
-    // Only connect to output if NOT microphone
-    if (!isMicrophoneActive) {
-      analyzer.connect(gainNode);
+      source.connect(gainNode);
       gainNode.connect(audioContext.destination);
-      console.log("Audio connected to output (non-microphone source)");
-    } else {
-      console.log("Microphone input - NOT connecting to output to prevent feedback");
+      console.log(`MP3 analysis path connected with input gain ${audioInputGain.toFixed(2)}`);
+      console.log("MP3 playback path connected unchanged");
     }
     
     // Start the analysis loop
@@ -1980,6 +2276,10 @@ function flipMike(state) {
       try { micAnalysisGainNode.disconnect(); } catch(e) {}
       micAnalysisGainNode = null;
     }
+    if (analysisGainNode) {
+      try { analysisGainNode.disconnect(); } catch(e) {}
+      analysisGainNode = null;
+    }
 
     analysisLoopActive = false;
     renderLoopActive = false;
@@ -2032,6 +2332,8 @@ let cameraAngleY = 0; // Initial camera angle around Y-axis in radians
 let cameraAngleX = 0; // Initial camera angle around X-axis in radians
 let zoom = 1700; // Zoom factor (controls how far the viewer is from the object)
 const AVATAR_DRAW_SCALE = 0.48;
+const AVATAR_SIZE_VARIATION_FACTOR = 0.5;
+const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -2046,6 +2348,11 @@ function normalizeHexColor(value, fallback) {
 function normalizeAvatarThickness(value) {
   const numberValue = parseFloat(value);
   return Number.isFinite(numberValue) ? clamp(numberValue, 0.4, 2.4) : DEFAULT_VISUAL_SETTINGS.avatarThickness;
+}
+
+function normalizeAvatarHeadScale(value) {
+  const numberValue = parseFloat(value);
+  return Number.isFinite(numberValue) ? clamp(numberValue, 0.65, 2.4) : DEFAULT_VISUAL_SETTINGS.avatarHeadScale;
 }
 
 function normalizePercentSlider(value, fallback) {
@@ -2134,6 +2441,7 @@ function applyVisualSettings(settings) {
     : DEFAULT_VISUAL_SETTINGS.avatarStyle;
   visualSettings.avatarColor = normalizeHexColor(visualSettings.avatarColor, DEFAULT_VISUAL_SETTINGS.avatarColor);
   visualSettings.avatarThickness = normalizeAvatarThickness(visualSettings.avatarThickness);
+  visualSettings.avatarHeadScale = normalizeAvatarHeadScale(visualSettings.avatarHeadScale);
   visualSettings.musicReactivity = normalizePercentSlider(visualSettings.musicReactivity, DEFAULT_VISUAL_SETTINGS.musicReactivity);
   visualSettings.motionAmount = normalizePercentSlider(visualSettings.motionAmount, DEFAULT_VISUAL_SETTINGS.motionAmount);
   visualSettings.backgroundMode = ['none', 'solid', 'gradient'].includes(visualSettings.backgroundMode)
@@ -2144,6 +2452,7 @@ function applyVisualSettings(settings) {
   if (avatarStyleSelect) avatarStyleSelect.value = visualSettings.avatarStyle;
   if (avatarColorInput) avatarColorInput.value = visualSettings.avatarColor;
   if (avatarThicknessSlider) avatarThicknessSlider.value = visualSettings.avatarThickness;
+  if (avatarHeadScaleSlider) avatarHeadScaleSlider.value = visualSettings.avatarHeadScale;
   if (musicReactivitySlider) musicReactivitySlider.value = visualSettings.musicReactivity;
   if (motionAmountSlider) motionAmountSlider.value = visualSettings.motionAmount;
   if (backgroundModeSelect) backgroundModeSelect.value = visualSettings.backgroundMode;
@@ -2160,46 +2469,75 @@ function applyVisualSettings(settings) {
   }
 }
 
+function requestAvatarRedraw() {
+  requestAnimationFrame(() => {
+    if (flagLearned == 0 && allPos && allPos.length > 0) {
+      drawBoy(allPos);
+      return;
+    }
+
+    if (nextBrainPos && nextBrainPos.length) {
+      drawBoy(nextBrainPos);
+      return;
+    }
+
+    if (lastBrainPos && lastBrainPos.length) {
+      drawBoy(lastBrainPos);
+      return;
+    }
+
+    visualize();
+  });
+}
+
 function readVisualSettingsFromControls() {
   applyVisualSettings({
     avatarStyle: avatarStyleSelect ? avatarStyleSelect.value : visualSettings.avatarStyle,
     avatarColor: avatarColorInput ? avatarColorInput.value : visualSettings.avatarColor,
     avatarThickness: avatarThicknessSlider ? avatarThicknessSlider.value : visualSettings.avatarThickness,
+    avatarHeadScale: avatarHeadScaleSlider ? avatarHeadScaleSlider.value : visualSettings.avatarHeadScale,
     musicReactivity: musicReactivitySlider ? musicReactivitySlider.value : visualSettings.musicReactivity,
     motionAmount: motionAmountSlider ? motionAmountSlider.value : visualSettings.motionAmount,
     backgroundMode: backgroundModeSelect ? backgroundModeSelect.value : visualSettings.backgroundMode,
     backgroundColor: backgroundColorInput ? backgroundColorInput.value : visualSettings.backgroundColor
   });
+  requestAvatarRedraw();
   scheduleLastSessionSave();
 }
 
 if (avatarStyleSelect) avatarStyleSelect.addEventListener('change', readVisualSettingsFromControls);
 if (avatarHeadPictureSelect) {
   avatarHeadPictureSelect.addEventListener('change', () => {
-    if (avatarHeadPictureSelect.value === UPLOAD_HEAD_PICTURE_VALUE) {
-      avatarHeadPictureSelect.value = selectedHeadPictureName;
-      if (avatarHeadPictureInput) avatarHeadPictureInput.click();
-      return;
-    }
     setCustomHeadPicture(avatarHeadPictureSelect.value);
     scheduleLastSessionSave();
   });
 }
+if (avatarHeadPictureUploadBtn && avatarHeadPictureInput) {
+  avatarHeadPictureUploadBtn.addEventListener('click', () => avatarHeadPictureInput.click());
+}
 if (avatarHeadPictureInput) {
-  avatarHeadPictureInput.addEventListener('change', event => {
+  avatarHeadPictureInput.addEventListener('change', async event => {
     const file = event.target.files && event.target.files[0];
-    saveUploadedHeadPicture(file);
-    scheduleLastSessionSave();
-    avatarHeadPictureInput.value = '';
+    try {
+      await saveUploadedHeadPicture(file);
+    } finally {
+      avatarHeadPictureInput.value = '';
+    }
   });
 }
+if (faceImageSaveBtn) faceImageSaveBtn.addEventListener('click', savePendingFaceImage);
+if (faceImageDownloadBtn) faceImageDownloadBtn.addEventListener('click', downloadPendingFaceImage);
+if (faceImageCancelBtn) faceImageCancelBtn.addEventListener('click', closeFaceImagePreview);
 if (avatarColorInput) avatarColorInput.addEventListener('input', readVisualSettingsFromControls);
 if (avatarThicknessSlider) avatarThicknessSlider.addEventListener('input', readVisualSettingsFromControls);
+if (avatarHeadScaleSlider) avatarHeadScaleSlider.addEventListener('input', readVisualSettingsFromControls);
 if (musicReactivitySlider) musicReactivitySlider.addEventListener('input', readVisualSettingsFromControls);
 if (motionAmountSlider) motionAmountSlider.addEventListener('input', readVisualSettingsFromControls);
+if (audioInputGainSlider) audioInputGainSlider.addEventListener('input', event => updateAudioInputGain(event.target.value));
 if (backgroundModeSelect) backgroundModeSelect.addEventListener('change', readVisualSettingsFromControls);
 if (backgroundColorInput) backgroundColorInput.addEventListener('input', readVisualSettingsFromControls);
 initializeHeadPictureSelect();
+updateAudioInputGain(audioInputGainSlider ? audioInputGainSlider.value : audioInputGain);
 applyVisualSettings(visualSettings);
 
 function drawRobotBoy(poseLandmarks) {
@@ -2314,10 +2652,13 @@ function drawRobotBoy(poseLandmarks) {
   function drawCustomHeadImage(x, y, w, h, skew) {
     if (!CUSTOM_HEAD_IMAGE.complete || !CUSTOM_HEAD_IMAGE.naturalWidth) return false;
 
-    const displayW = w * 1.33;
-    const displayH = h * 1.33;
-    const displayX = x - (displayW - w) / 2;
-    const displayY = y - (displayH - h) / 2;
+    const headScale = 1.12;
+    const displayW = w * headScale;
+    const displayH = h * headScale;
+    const anchorX = x + w / 2 + skew * 0.35;
+    const anchorY = y + h * 1.03;
+    const displayX = anchorX - displayW / 2;
+    const displayY = anchorY - displayH;
     const imgRatio = CUSTOM_HEAD_IMAGE.naturalWidth / CUSTOM_HEAD_IMAGE.naturalHeight;
     const boxRatio = displayW / displayH;
     let sourceX = 0;
@@ -2334,8 +2675,8 @@ function drawRobotBoy(poseLandmarks) {
     }
 
     canvasCtx.save();
-    canvasCtx.translate(displayX + skew, displayY);
-    canvasCtx.transform(1, 0, (-2 * skew) / displayH, 1, 0, 0);
+    canvasCtx.translate(displayX, displayY);
+    canvasCtx.transform(1, 0, (-1.1 * skew) / displayH, 1, 0, 0);
     canvasCtx.beginPath();
     canvasCtx.roundRect(0, 0, displayW, displayH, displayW * 0.12);
     canvasCtx.clip();
@@ -2371,9 +2712,13 @@ function drawRobotBoy(poseLandmarks) {
     lm[LS].y - lm[RS].y
   );
 
-  // Main clamp: prevents the robot from becoming too thin.
-  let shoulderW = rawShoulderW * W * scale * 0.75;
-  shoulderW = clamp(shoulderW, 45, 180);
+  // Dampen shoulder-derived scale so the full avatar size varies less between frames.
+  const dynamicShoulderW = clamp(rawShoulderW * W * scale * 0.75, 45, 180);
+  const shoulderW = clamp(
+    AVATAR_REFERENCE_SHOULDER_WIDTH + (dynamicShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * AVATAR_SIZE_VARIATION_FACTOR,
+    55,
+    145
+  );
 
   // Robot part sizes
   const torsoW = clamp(shoulderW * 1.35, 55, 220);
@@ -2396,6 +2741,15 @@ function drawRobotBoy(poseLandmarks) {
     x: (p11.x + p12.x) / 2,
     y: (p11.y + p12.y) / 2
   };
+  const shoulderBarSpread = 0.92;
+  const pShoulderLeft = {
+    x: pSh.x + (p11.x - pSh.x) * shoulderBarSpread,
+    y: pSh.y + (p11.y - pSh.y) * shoulderBarSpread
+  };
+  const pShoulderRight = {
+    x: pSh.x + (p12.x - pSh.x) * shoulderBarSpread,
+    y: pSh.y + (p12.y - pSh.y) * shoulderBarSpread
+  };
 
   const pHip = {
     x: (p23.x + p24.x) / 2,
@@ -2406,46 +2760,7 @@ function drawRobotBoy(poseLandmarks) {
   drawSegment(pSh, pHip, lm[LS], lm[LH], torsoW, TORSO, DARK, 0);
 
   // Shoulders
-  drawSegment(p11, p12, lm[LS], lm[RS], torsoW * 0.55, TORSO, DARK, 0);
-
-  // Arms
-  drawSegment(p11, p13, lm[LS], lm[LE], armW, LIMB, DARK, 0.15);
-  drawSegment(p12, p14, lm[RS], lm[RE], armW, LIMB, DARK, 0.15);
-
-  drawSegment(p13, p15, lm[LE], lm[LW], foreW, LIMB, DARK, 0.15);
-  drawSegment(p14, p16, lm[RE], lm[RW], foreW, LIMB, DARK, 0.15);
-
-  drawJoint(p13, jointR, JOINT);
-  drawJoint(p14, jointR, JOINT);
-
-  // Hands
-  canvasCtx.beginPath();
-  canvasCtx.roundRect(
-    p15.x - handW * 0.5,
-    p15.y - handH * 0.5,
-    handW,
-    handH,
-    handH * 0.3
-  );
-  canvasCtx.fillStyle = LIMB;
-  canvasCtx.fill();
-  canvasCtx.strokeStyle = DARK;
-  canvasCtx.lineWidth = clamp(1.5 * (visualSettings.avatarThickness || 1), 1.5, 6);
-  canvasCtx.stroke();
-
-  canvasCtx.beginPath();
-  canvasCtx.roundRect(
-    p16.x - handW * 0.5,
-    p16.y - handH * 0.5,
-    handW,
-    handH,
-    handH * 0.3
-  );
-  canvasCtx.fillStyle = LIMB;
-  canvasCtx.fill();
-  canvasCtx.strokeStyle = DARK;
-  canvasCtx.lineWidth = clamp(1.5 * (visualSettings.avatarThickness || 1), 1.5, 6);
-  canvasCtx.stroke();
+  drawSegment(pShoulderLeft, pShoulderRight, lm[LS], lm[RS], torsoW * 0.46, TORSO, DARK, 0);
 
   // Hips
   drawSegment(p23, p24, lm[LH], lm[RH], torsoW * 0.6, TORSO, DARK, 0);
@@ -2482,6 +2797,45 @@ function drawRobotBoy(poseLandmarks) {
     footW,
     footH,
     footH * 0.3
+  );
+  canvasCtx.fillStyle = LIMB;
+  canvasCtx.fill();
+  canvasCtx.strokeStyle = DARK;
+  canvasCtx.lineWidth = clamp(1.5 * (visualSettings.avatarThickness || 1), 1.5, 6);
+  canvasCtx.stroke();
+
+  // Arms are drawn after hips and legs so hands stay visually in front.
+  drawSegment(p11, p13, lm[LS], lm[LE], armW, LIMB, DARK, 0.15);
+  drawSegment(p12, p14, lm[RS], lm[RE], armW, LIMB, DARK, 0.15);
+
+  drawSegment(p13, p15, lm[LE], lm[LW], foreW, LIMB, DARK, 0.15);
+  drawSegment(p14, p16, lm[RE], lm[RW], foreW, LIMB, DARK, 0.15);
+
+  drawJoint(p13, jointR, JOINT);
+  drawJoint(p14, jointR, JOINT);
+
+  // Hands
+  canvasCtx.beginPath();
+  canvasCtx.roundRect(
+    p15.x - handW * 0.5,
+    p15.y - handH * 0.5,
+    handW,
+    handH,
+    handH * 0.3
+  );
+  canvasCtx.fillStyle = LIMB;
+  canvasCtx.fill();
+  canvasCtx.strokeStyle = DARK;
+  canvasCtx.lineWidth = clamp(1.5 * (visualSettings.avatarThickness || 1), 1.5, 6);
+  canvasCtx.stroke();
+
+  canvasCtx.beginPath();
+  canvasCtx.roundRect(
+    p16.x - handW * 0.5,
+    p16.y - handH * 0.5,
+    handW,
+    handH,
+    handH * 0.3
   );
   canvasCtx.fillStyle = LIMB;
   canvasCtx.fill();
@@ -2536,8 +2890,9 @@ function drawSkewedRoundBox(x, y, w, h, skew, radius, fill, stroke, lineWidth) {
   const nX = nProj.x * W * scale + W / 2;
   const nY = nProj.y * H * scale + H / 2;
 
-  const hW = clamp(shoulderW * 1.35, 55, 210);
-  const hH = clamp(hW * 1.1, 60, 230);
+  const headSizeScale = visualSettings.avatarHeadScale || 1;
+  const hW = clamp(shoulderW * 1.35 * headSizeScale, 35, 430);
+  const hH = clamp(hW * 1.1, 60, 470);
 
   const hX = nX - hW / 2;
   const hY = nY - hH * 0.62;
@@ -2552,7 +2907,15 @@ const headSkew = clamp(shoulderDepth * hW * 0.85, -hW * 0.22, hW * 0.22);
 
 const faceSkew = headSkew * 0.55;
 
-  if (visualSettings.avatarStyle === 'myHead' && drawCustomHeadImage(hX, hY, hW, hH, headSkew)) {
+  const shoulderCenterX = (p11.x + p12.x) / 2;
+  const shoulderTopY = Math.min(p11.y, p12.y);
+  const attachedHeadW = clamp(shoulderW * 1.05 * headSizeScale, 34, 360);
+  const attachedHeadH = clamp(attachedHeadW * 1.08, 38, 390);
+  const attachedHeadX = shoulderCenterX - attachedHeadW / 2;
+  const attachedHeadY = shoulderTopY - attachedHeadH * 0.92;
+  const attachedHeadSkew = headSkew * 0.35;
+
+  if (visualSettings.avatarStyle === 'myHead' && drawCustomHeadImage(attachedHeadX, attachedHeadY, attachedHeadW, attachedHeadH, attachedHeadSkew)) {
     return;
   }
 
@@ -3094,7 +3457,7 @@ const dbReady = new Promise((resolve, reject) => {
 	resolveDbReady = resolve;
 	rejectDbReady = reject;
 });
-const request = indexedDB.open('LocalDB', 2);
+const request = indexedDB.open('LocalDB', 3);
 
 request.onerror = function(event) {
 	console.error('Database error:', event.target.errorCode);
@@ -3112,11 +3475,15 @@ request.onupgradeneeded = function(event) {
 	if (!db.objectStoreNames.contains(SETTINGS_STORE_NAME)) {
 		db.createObjectStore(SETTINGS_STORE_NAME, { keyPath: 'name' });
 	}
+	if (!db.objectStoreNames.contains(AVATAR_IMAGES_STORE_NAME)) {
+		db.createObjectStore(AVATAR_IMAGES_STORE_NAME, { keyPath: 'id' });
+	}
 };
 
 request.onsuccess = function(event) {
 	db = event.target.result;
 	if (resolveDbReady) resolveDbReady(db);
+	refreshAvatarImageCache().catch(error => console.warn('Could not load avatar images:', error));
 	populateDatas();
 	populateModels();
 };
@@ -3156,6 +3523,7 @@ async function populateModels() {
 
 	try {
 		await loadBuiltInHeadPictures();
+		await refreshAvatarImageCache();
 		initializeHeadPictureSelect();
 		await ensureStartupDemoModel();
 		const models = await getAllModelRecords();
@@ -3440,7 +3808,10 @@ function getSessionSettingsSnapshot(modelName) {
     settings: {
       training: getTrainingSettingsSnapshot(),
       visual: Object.assign({}, visualSettings),
-      headPictureName: selectedHeadPictureName
+      headPictureName: selectedHeadPictureName,
+      selectedAvatarImageId: avatarImageCache.some(item => item.id === selectedHeadPictureName)
+        ? selectedHeadPictureName
+        : null
     }
   };
 }
@@ -3448,9 +3819,10 @@ function getSessionSettingsSnapshot(modelName) {
 function applySettingsSnapshot(settings) {
   if (!settings) return;
 
-  if (settings.headPictureName) setCustomHeadPicture(settings.headPictureName);
+  const headPictureSetting = settings.selectedAvatarImageId || settings.headPictureName;
+  if (headPictureSetting) setCustomHeadPicture(headPictureSetting);
   if (settings.visual) applyVisualSettings(settings.visual);
-  if (settings.headPictureName) setCustomHeadPicture(settings.headPictureName);
+  if (headPictureSetting) setCustomHeadPicture(headPictureSetting);
 
   if (settings.training) {
     if (settings.training.activation && validations.includes(settings.training.activation)) {
@@ -3652,10 +4024,11 @@ function getInMemoryModelData() {
   }
 }
 
-function buildModelExport(modelRecord, modelDataOverride, modelNameOverride) {
+function buildModelExport(modelRecord, modelDataOverride, modelNameOverride, selectedAvatarImage) {
   const fallbackName = modelNameOverride || currentModelName || 'current-model';
   const modelData = modelDataOverride || (modelRecord && modelRecord.data ? modelRecord.data : null);
   const modelName = modelRecord && modelRecord.name ? modelRecord.name : fallbackName;
+  const embeddedAvatarImage = selectedAvatarImage ? normalizeAvatarImageRecord(selectedAvatarImage) : null;
 
   return {
     app: 'Dancing5',
@@ -3671,8 +4044,10 @@ function buildModelExport(modelRecord, modelDataOverride, modelNameOverride) {
     settings: {
       training: getTrainingSettingsSnapshot(),
       visual: Object.assign({}, visualSettings),
-      headPictureName: selectedHeadPictureName
-    }
+      headPictureName: selectedHeadPictureName,
+      selectedAvatarImageId: embeddedAvatarImage ? embeddedAvatarImage.id : null
+    },
+    avatarImages: embeddedAvatarImage ? [embeddedAvatarImage] : []
   };
 }
 
@@ -3703,7 +4078,8 @@ async function exportCurrentModelJson() {
       console.log('Dancing5 export: using current in-memory model.');
     }
 
-    const exportData = buildModelExport(storedModel, memoryModelData, selectedName);
+    const selectedAvatarImage = await readSelectedAvatarImageForExport();
+    const exportData = buildModelExport(storedModel, memoryModelData, selectedName, selectedAvatarImage);
 
     if (!exportData.model && !exportData.settings) {
       setModelJsonStatus('No model or settings are available to export.', true);
@@ -3770,7 +4146,8 @@ function normalizeImportedModelExport(data) {
     modelName: (data.model && data.model.name) || data.modelName || data.name || 'imported-model',
     modelData: modelData,
     modelCreatedAt: (data.model && data.model.createdAt) || data.createdAt || null,
-    settings: settings
+    settings: settings,
+    avatarImages: Array.isArray(data.avatarImages) ? data.avatarImages : []
   };
 }
 
@@ -3790,6 +4167,13 @@ async function importModelExport(data, sourceLabel, options = {}) {
   }
 
   const normalized = normalizeImportedModelExport(data);
+  if (normalized.avatarImages.length) {
+    for (const avatarImage of normalized.avatarImages) {
+      const normalizedAvatarImage = normalizeAvatarImageRecord(avatarImage);
+      if (normalizedAvatarImage) await writeAvatarImageRecord(normalizedAvatarImage);
+    }
+    await refreshAvatarImageCache();
+  }
   if (options.applySettings !== false) {
     applySettingsSnapshot(normalized.settings);
   }
@@ -3810,7 +4194,8 @@ async function importModelExport(data, sourceLabel, options = {}) {
       settings: normalized.settings || {
         training: null,
         visual: Object.assign({}, DEFAULT_VISUAL_SETTINGS),
-        headPictureName: DEFAULT_HEAD_PICTURE.name
+        headPictureName: DEFAULT_HEAD_PICTURE.name,
+        selectedAvatarImageId: null
       }
     });
 

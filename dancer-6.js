@@ -184,6 +184,13 @@ function getModelDisplayName(modelName) {
   return String(modelName || '').replace(/\.json$/i, '');
 }
 
+function getPromptName(message, defaultValue = '') {
+  const value = prompt(message, defaultValue || '');
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 function getPictureDisplayName(fileName) {
   return String(fileName || '').replace(/\.(png|jpe?g|webp)$/i, '');
 }
@@ -759,6 +766,7 @@ trainSelect.addEventListener('change', updateDataSelection);
 function updateDataSelection(event) {
   const selectedData= trainSelect.value;
 
+	if (String(selectedData).startsWith('new:')) return;
     loadTrainData(selectedData);
  
  }
@@ -766,6 +774,7 @@ function updateDataSelection(event) {
  
 function loadTrainData(tID) {
 	const trainId = parseInt(tID, 10);
+	if (!Number.isFinite(trainId)) return;
     const transaction = db.transaction(['datas'], 'readonly');
     const objectStore = transaction.objectStore('datas');
     const request = objectStore.get(trainId);
@@ -787,6 +796,23 @@ function loadTrainData(tID) {
     request.onerror = function(event) {
         console.error('Error loading training data:', event.target.errorCode);
     };
+}
+
+function selectDatasetInUi(datasetId, datasetName) {
+	const datasetSelect = document.getElementById('train-select');
+	if (!datasetSelect || !datasetName) return;
+
+	const optionValue = datasetId == null ? `new:${datasetName}` : String(datasetId);
+	let option = Array.from(datasetSelect.options).find(item => item.value === optionValue);
+	if (!option) {
+		option = document.createElement('option');
+		option.value = optionValue;
+		option.textContent = datasetName;
+		datasetSelect.appendChild(option);
+	}
+
+	option.textContent = datasetName;
+	datasetSelect.value = optionValue;
 }
  
  
@@ -3350,7 +3376,7 @@ let freshModel = null;
 
 function createNewModel() {
     // Prompt the user for the new model name
-    const modelName = prompt('Enter name for the new model:');
+    const modelName = getPromptName('Enter name for the new model:');
     if (!modelName) {
         alert('Model creation canceled.');
         return; // Exit if the user cancels the prompt or enters an empty name
@@ -3379,17 +3405,7 @@ function createNewModel() {
         return;
     }
 
-    // Update the model-select element with the new model
-    const modelSelect = document.getElementById('model-select');
-    const option = document.createElement('option');
-    option.value = modelName;
-    option.textContent = getModelDisplayName(modelName);
-    modelSelect.appendChild(option);
-
-    // Select the new model in the dropdown
-    modelSelect.value = modelName;
-	
-	currentModelName = modelName;
+    selectModelInUi(modelName);
 
     // Dispatch the change event
     // const event = new Event('change');
@@ -3491,7 +3507,7 @@ request.onsuccess = function(event) {
     
 
 
-function populateDatas() {
+function populateDatas(selectedDataId) {
 	const selecto = document.getElementById('train-select');
 	selecto.innerHTML = '';
 
@@ -3507,6 +3523,10 @@ function populateDatas() {
 			option.textContent = data.name;
 			selecto.appendChild(option);
 		});
+
+		if (selectedDataId != null) {
+			selecto.value = String(selectedDataId);
+		}
 
 		//document.getElementById('moncount').textContent = datas.length.toString().padStart(3, '0');
 	};
@@ -3762,9 +3782,15 @@ let dataName = null;
  
  
 document.getElementById('create-train-btn').addEventListener('click', function() {
-	  dataName = prompt('Enter name for the new train dataset:');
+	  dataName = getPromptName('Enter name for the new train dataset:', dataName || '');
+	  if (!dataName) {
+		  alert('Dataset creation canceled.');
+		  return;
+	  }
 	  
 	  trainingData = [];
+	  document.getElementById('moncount').textContent = '0';
+	  selectDatasetInUi(null, dataName);
 
 });
 
@@ -4292,15 +4318,18 @@ async function loadStartupDemoModelJson() {
 
 
 function saveModel() {
-    const modelName = currentModelName;
+    const modelSelect = document.getElementById('model-select');
+    const selectedModelName = modelSelect && modelSelect.value ? modelSelect.value : '';
+    const modelName = getPromptName('Enter name for this model:', currentModelName || selectedModelName);
     console.log('Saving model:', modelName);
 
     // Check if a valid model name is provided
     if (!modelName) {
-        console.error('Invalid model name or model does not exist.');
-        alert('Cannot save the model. Please ensure a valid model is selected.');
+        alert('Model save canceled.');
         return;
     }
+
+    currentModelName = modelName;
 
     // Serialize the model for storage
     const modelData = network.toJSON();
@@ -4327,8 +4356,10 @@ function saveModel() {
             await saveModelSettings(modelName);
             await saveLastSession(modelName);
             rememberLastModelName(modelName);
+            selectModelInUi(modelName);
             alert(`Model "${modelName}" has been saved successfully.`);
-            populateModels(); // Refresh the model select element if needed
+            await populateModels(); // Refresh the model select element if needed
+            selectModelInUi(modelName);
         } catch (error) {
             console.error('Error saving model settings to IndexedDB:', error);
             alert(`Model "${modelName}" was saved, but its avatar settings could not be saved.`);
@@ -4346,7 +4377,7 @@ function saveModel() {
 function saveData() {
 	
      if (!dataName) {
-        dataName = prompt('Enter name for the new train dataset:');
+        dataName = getPromptName('Enter name for the new train dataset:');
         if (!dataName) {
             alert('Dataset name is required.');
             return;
@@ -4375,7 +4406,9 @@ function saveData() {
 
     // Success handler
     addRequest.onsuccess = function(event) {
-		populateDatas();
+		const savedDatasetId = event.target.result;
+		populateDatas(savedDatasetId);
+		selectDatasetInUi(savedDatasetId, dataName);
         console.log(`Training data for model "${dataName }" saved to IndexedDB with key:`, event.target.result);
         alert(`Training data for model "${ dataName }" has been saved successfully.`);
     };

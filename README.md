@@ -18,6 +18,7 @@ The public demo imports example models from `examples/models.json` on startup so
 ## Features
 
 - Animated avatars and dancer visualization.
+- Magic VJ mode for abstract body-driven ribbons, particles, geometry, and audio-reactive background visuals.
 - Microphone and music-file analysis.
 - Neural-network based dancer behavior.
 - Import/export JSON dancer models.
@@ -25,6 +26,8 @@ The public demo imports example models from `examples/models.json` on startup so
 - Custom avatar head images through the `face-hair-cutout-js` adapter.
 - Local browser persistence through IndexedDB.
 - Future BOW/WATTOO/VJ integration path.
+
+See `docs/MAGIC_STYLE.md` for Magic avatar/background behavior, controls, and manual tests.
 
 ## How It Works
 

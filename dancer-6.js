@@ -119,6 +119,16 @@ let avatarImageCache = [];
 let pendingFaceImageResult = null;
 let faceImageExtractionInProgress = false;
 
+function hideLoadingSplash() {
+  const splash = document.getElementById('loading-splash');
+  if (!splash) return;
+  splash.style.opacity = '0';
+  splash.style.transition = 'opacity 220ms ease';
+  setTimeout(() => {
+    splash.style.display = 'none';
+  }, 240);
+}
+
 function setMainControlsVisible(visible) {
   if (mainControls) mainControls.style.display = visible ? '' : 'none';
   if (visible) {
@@ -607,8 +617,6 @@ function readUrlShareState() {
   if (params.get('motion')) state.visual.motionAmount = numberValue('motion');
   if (params.get('bg')) state.visual.backgroundMode = params.get('bg');
   if (params.get('bgc')) state.visual.backgroundColor = params.get('bgc');
-  if (params.get('rx')) state.camera.rotationX = numberValue('rx');
-  if (params.get('ry')) state.camera.rotationY = numberValue('ry');
   if (params.get('zoom')) state.camera.zoom = numberValue('zoom');
 
   return state;
@@ -620,16 +628,6 @@ function applyUrlShareState(state) {
   if (state.headPictureName) setCustomHeadPicture(state.headPictureName);
   if (state.visual && Object.keys(state.visual).length) applyVisualSettings(state.visual);
   if (state.headPictureName) setCustomHeadPicture(state.headPictureName);
-  if (typeof state.camera.rotationX === 'number') {
-    updateRotationX(state.camera.rotationX);
-    const slider = document.getElementById('rotation-x-slider');
-    if (slider) slider.value = state.camera.rotationX;
-  }
-  if (typeof state.camera.rotationY === 'number') {
-    updateRotationY(state.camera.rotationY);
-    const slider = document.getElementById('rotation-y-slider');
-    if (slider) slider.value = state.camera.rotationY;
-  }
   if (typeof state.camera.zoom === 'number') {
     updateZoom(state.camera.zoom);
     const slider = document.getElementById('zoom-slider');
@@ -649,8 +647,6 @@ function updateShareUrlHash() {
   params.set('motion', visualSettings.motionAmount);
   params.set('bg', visualSettings.backgroundMode);
   params.set('bgc', visualSettings.backgroundColor);
-  params.set('rx', cameraAngleX);
-  params.set('ry', cameraAngleY);
   params.set('zoom', zoom);
   history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params.toString()}`);
 }
@@ -667,9 +663,31 @@ function updateShareUrlHash() {
 
 // À mettre une fois à l'init du canvas, avant tout drawRobotBoy
 const dpr = window.devicePixelRatio || 1;
-canvasElement.width  = canvasElement.clientWidth  * dpr;
-canvasElement.height = canvasElement.clientHeight * dpr;
-canvasCtx.scale(dpr, dpr);
+let currentAvatarCanvasLayout = null;
+
+function resizeAvatarCanvasForDisplay() {
+  const targetWidth = Math.max(1, Math.round(canvasElement.clientWidth * dpr));
+  const targetHeight = Math.max(1, Math.round(canvasElement.clientHeight * dpr));
+  if (canvasElement.width !== targetWidth || canvasElement.height !== targetHeight) {
+    canvasElement.width = targetWidth;
+    canvasElement.height = targetHeight;
+  }
+  canvasCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function setAvatarCanvasLayout(layoutName) {
+  const targetLayout = 'fullscreen';
+  if (currentAvatarCanvasLayout !== targetLayout) {
+    canvasElement.style.width = '100%';
+    canvasElement.style.height = '100%';
+    canvasElement.style.top = '0';
+    canvasElement.style.right = '0';
+    currentAvatarCanvasLayout = targetLayout;
+  }
+  resizeAvatarCanvasForDisplay();
+}
+
+setAvatarCanvasLayout('normal');
 
 function clearAvatarCanvas() {
   canvasCtx.save();
@@ -1056,7 +1074,6 @@ function updateAudioInputGain(value) {
   if (audioInputGainSlider) audioInputGainSlider.value = audioInputGain;
   if (audioInputGainValue) audioInputGainValue.textContent = audioInputGain.toFixed(2);
   if (analysisGainNode) analysisGainNode.gain.value = audioInputGain;
-  console.log(`Audio input gain changed: ${audioInputGain.toFixed(2)}`);
 }
 
 function resumeAudioContext(context, label) {
@@ -2360,7 +2377,7 @@ let zoom = 1700; // Zoom factor (controls how far the viewer is from the object)
 const AVATAR_DRAW_SCALE = 0.48;
 const AVATAR_CENTER_X_RATIO = 0.5;
 const AVATAR_CENTER_Y_RATIO = 0.47;
-const AVATAR_SIZE_VARIATION_FACTOR = 0.35;
+const AVATAR_SIZE_VARIATION_FACTOR = 0.5;
 const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
 const AVATAR_MAX_WIDTH_RATIO = 0.34;
 const AVATAR_MAX_HEIGHT_RATIO = 0.44;
@@ -2415,6 +2432,524 @@ function projectAvatarPoint(proj, width, height, centerX, centerY, scale) {
     x: centerX + clamp(proj.x * width * scale, -width * AVATAR_MAX_WIDTH_RATIO, width * AVATAR_MAX_WIDTH_RATIO),
     y: centerY + clamp(proj.y * height * scale, -height * AVATAR_MAX_HEIGHT_RATIO, height * AVATAR_MAX_HEIGHT_RATIO)
   };
+}
+
+const MAGIC_CONFIG = {
+  maxParticles: 180,
+  emitters: [5, 6, 11, 12],
+  trailLength: 22,
+  idleParticleRate: 2,
+  maxBodyWidthRatio: 0.46,
+  maxBodyHeightRatio: 0.50
+};
+
+const MAGIC_CONNECTIONS = [
+  [1, 2], [1, 3], [3, 5],
+  [2, 4], [4, 6],
+  [1, 7], [2, 8], [7, 8],
+  [7, 9], [9, 11],
+  [8, 10], [10, 12],
+  [1, 8], [2, 7], [5, 6], [11, 12]
+];
+
+const magicState = {
+  previousPoints: null,
+  trails: Array.from({ length: 13 }, () => []),
+  particles: [],
+  pulse: 0,
+  idleSpin: 0
+};
+
+function getAverageAudioBand(start, end) {
+  if (!newDt || !newDt.length) return 0;
+  const safeStart = clamp(start, 0, newDt.length - 1);
+  const safeEnd = clamp(end, safeStart, newDt.length - 1);
+  let total = 0;
+  let count = 0;
+
+  for (let i = safeStart; i <= safeEnd; i++) {
+    total += newDt[i] || 0;
+    count++;
+  }
+
+  return count ? total / count : 0;
+}
+
+function getMagicAudioFeatures() {
+  const bass = getAverageAudioBand(1, 6);
+  const mids = getAverageAudioBand(7, 24);
+  const highs = getAverageAudioBand(25, 63);
+  const energy = clamp((bass * 1.2 + mids + highs * 0.9) / 3, 0, 1);
+  return {
+    bass,
+    mids,
+    highs,
+    energy,
+    reactive: getMusicReactivityFactor()
+  };
+}
+
+function getMagicColors(features, variant = 'magic') {
+  const base = hexToRgb(visualSettings.avatarColor || DEFAULT_VISUAL_SETTINGS.avatarColor);
+  const time = performance.now() * 0.00008;
+  const shift = ((features.energy * 160 + features.highs * 120 + time * 360) % 360 + 360) % 360;
+  const isMagic2 = variant === 'magic2';
+  const accent = `hsl(${shift}, 100%, ${58 + features.highs * 22}%)`;
+  const second = `hsl(${(shift + 105 + features.bass * 70) % 360}, 96%, ${48 + features.mids * 24}%)`;
+  const glow = `rgba(${base.r}, ${base.g}, ${base.b}, ${0.32 + features.energy * 0.45})`;
+  return {
+    base: `rgb(${base.r}, ${base.g}, ${base.b})`,
+    baseSoft: `rgba(${base.r}, ${base.g}, ${base.b}, 0.18)`,
+    glow,
+    accent,
+    second,
+    white: isMagic2
+      ? `rgba(120, 210, 230, ${0.16 + features.highs * 0.22})`
+      : `rgba(245, 255, 255, ${0.42 + features.highs * 0.45})`
+  };
+}
+
+function projectMagicPose(poseLandmarks) {
+  if (!poseLandmarks || poseLandmarks.length < 13) return null;
+
+  const W = canvasElement.clientWidth;
+  const H = canvasElement.clientHeight;
+  const centerX = (poseLandmarks[1].x + poseLandmarks[2].x + poseLandmarks[7].x + poseLandmarks[8].x) / 4;
+  const centerY = (poseLandmarks[1].y + poseLandmarks[2].y + poseLandmarks[7].y + poseLandmarks[8].y) / 4;
+  const centerZ = (poseLandmarks[1].z + poseLandmarks[2].z + poseLandmarks[7].z + poseLandmarks[8].z) / 4;
+  const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
+  const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
+  const perspective = zoom;
+  const viewerDistance = 800;
+  const screenFill = 0.9 + normalizePercentSlider(visualSettings.motionAmount, DEFAULT_VISUAL_SETTINGS.motionAmount) / 100 * 0.45;
+  const scale = AVATAR_DRAW_SCALE * screenFill;
+
+  function project3D(x, y, z) {
+    z = clamp(z / 2, -2.5, 2.5);
+    const rotX = x * Math.cos(cameraAngleY) - z * Math.sin(cameraAngleY);
+    const rotZ = z * Math.cos(cameraAngleY) + x * Math.sin(cameraAngleY);
+    const rotY = y * Math.cos(cameraAngleX) - rotZ * Math.sin(cameraAngleX);
+    const adjZ = rotZ * Math.cos(cameraAngleX) + y * Math.sin(cameraAngleX);
+    const ps = perspective / (viewerDistance - adjZ);
+
+    return {
+      x: canvasCenterX + clamp(rotX * ps * W * scale, -W * MAGIC_CONFIG.maxBodyWidthRatio, W * MAGIC_CONFIG.maxBodyWidthRatio),
+      y: canvasCenterY + clamp(rotY * ps * H * scale, -H * MAGIC_CONFIG.maxBodyHeightRatio, H * MAGIC_CONFIG.maxBodyHeightRatio)
+    };
+  }
+
+  const points = poseLandmarks.map(point => point ? project3D(point.x - centerX, point.y - centerY, point.z - centerZ) : null);
+  const rawShoulderW = points[1] && points[2] ? Math.hypot(points[1].x - points[2].x, points[1].y - points[2].y) : AVATAR_REFERENCE_SHOULDER_WIDTH;
+  const shoulderW = clamp(AVATAR_REFERENCE_SHOULDER_WIDTH + (rawShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * 0.42, 62, 150);
+  [points[1], points[2]] = clampPairSpread(points[1], points[2], shoulderW * 0.72, shoulderW * 1.25);
+  [points[7], points[8]] = clampPairSpread(points[7], points[8], shoulderW * 0.58, shoulderW * 1.08);
+  points[3] = clampPointToDistance(points[3], points[1], shoulderW * 1.28);
+  points[4] = clampPointToDistance(points[4], points[2], shoulderW * 1.28);
+  points[5] = clampPointToDistance(points[5], points[3], shoulderW * 1.34);
+  points[6] = clampPointToDistance(points[6], points[4], shoulderW * 1.34);
+
+  return {
+    points,
+    center: {
+      x: canvasCenterX,
+      y: canvasCenterY
+    },
+    shoulderW
+  };
+}
+
+function measureMagicMotion(points) {
+  if (!points || !magicState.previousPoints) return 0;
+  let total = 0;
+  let count = 0;
+
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i];
+    const previous = magicState.previousPoints[i];
+    if (!point || !previous) continue;
+    total += Math.hypot(point.x - previous.x, point.y - previous.y);
+    count++;
+  }
+
+  return count ? clamp(total / count / 36, 0, 1) : 0;
+}
+
+function rememberMagicTrails(points) {
+  if (!points) return;
+  for (let i = 0; i < Math.min(points.length, magicState.trails.length); i++) {
+    if (!points[i]) continue;
+    const trail = magicState.trails[i];
+    trail.push({ x: points[i].x, y: points[i].y });
+    while (trail.length > MAGIC_CONFIG.trailLength) trail.shift();
+  }
+}
+
+function emitMagicParticle(x, y, color, power, angleBias) {
+  if (magicState.particles.length >= MAGIC_CONFIG.maxParticles) {
+    magicState.particles.splice(0, magicState.particles.length - MAGIC_CONFIG.maxParticles + 1);
+  }
+
+  const angle = angleBias + (Math.random() - 0.5) * Math.PI * 1.6;
+  const speed = 0.6 + Math.random() * (2.8 + power * 5);
+  magicState.particles.push({
+    x,
+    y,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    life: 28 + Math.random() * 34 + power * 42,
+    age: 0,
+    size: 1.5 + Math.random() * (3.5 + power * 7),
+    color
+  });
+}
+
+function updateAndDrawMagicParticles(features, colors) {
+  canvasCtx.save();
+  canvasCtx.globalCompositeOperation = 'lighter';
+
+  for (let i = magicState.particles.length - 1; i >= 0; i--) {
+    const particle = magicState.particles[i];
+    particle.age++;
+    particle.vx *= 0.985;
+    particle.vy = particle.vy * 0.985 - 0.008 * features.bass;
+    particle.x += particle.vx;
+    particle.y += particle.vy;
+
+    const lifeRatio = 1 - particle.age / particle.life;
+    if (lifeRatio <= 0) {
+      magicState.particles.splice(i, 1);
+      continue;
+    }
+
+    canvasCtx.globalAlpha = lifeRatio * (0.35 + features.highs * 0.65);
+    canvasCtx.fillStyle = particle.color || colors.accent;
+    canvasCtx.beginPath();
+    canvasCtx.arc(particle.x, particle.y, particle.size * lifeRatio, 0, Math.PI * 2);
+    canvasCtx.fill();
+  }
+
+  canvasCtx.restore();
+}
+
+function getMagicBorderPoint(origin, angle, width, height) {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const candidates = [];
+
+  if (Math.abs(dx) > 0.0001) {
+    candidates.push((0 - origin.x) / dx);
+    candidates.push((width - origin.x) / dx);
+  }
+  if (Math.abs(dy) > 0.0001) {
+    candidates.push((0 - origin.y) / dy);
+    candidates.push((height - origin.y) / dy);
+  }
+
+  let best = Infinity;
+  candidates.forEach(value => {
+    if (value > 0 && value < best) best = value;
+  });
+
+  if (!Number.isFinite(best)) best = Math.max(width, height);
+
+  return {
+    x: clamp(origin.x + dx * best, 0, width),
+    y: clamp(origin.y + dy * best, 0, height)
+  };
+}
+
+function renderMagicBackground(poseLandmarks) {
+  const W = canvasElement.clientWidth;
+  const H = canvasElement.clientHeight;
+  const features = getMagicAudioFeatures();
+  const colors = getMagicColors(features);
+  const projected = projectMagicPose(poseLandmarks);
+  const center = projected && projected.points[1] && projected.points[2]
+    ? {
+        x: (projected.points[1].x + projected.points[2].x + (projected.points[7] ? projected.points[7].x : projected.center.x) + (projected.points[8] ? projected.points[8].x : projected.center.x)) / 4,
+        y: (projected.points[1].y + projected.points[2].y + (projected.points[7] ? projected.points[7].y : projected.center.y) + (projected.points[8] ? projected.points[8].y : projected.center.y)) / 4
+      }
+    : {
+        x: W * (0.5 + Math.sin(performance.now() * 0.00025) * 0.08),
+        y: H * (0.48 + Math.cos(performance.now() * 0.0002) * 0.06)
+      };
+
+  const time = performance.now() * 0.001;
+  clearAvatarCanvas();
+
+  const bg = canvasCtx.createRadialGradient(center.x, center.y, 10, center.x, center.y, Math.max(W, H) * (0.55 + features.bass * 0.25));
+  bg.addColorStop(0, `rgba(255,255,255,${0.08 + features.energy * 0.12})`);
+  bg.addColorStop(0.18, colors.baseSoft);
+  bg.addColorStop(0.48, `rgba(0, 255, 190, ${0.06 + features.mids * 0.10})`);
+  bg.addColorStop(1, 'rgba(0,0,0,0.02)');
+  canvasCtx.fillStyle = bg;
+  canvasCtx.fillRect(0, 0, W, H);
+
+  canvasCtx.save();
+  canvasCtx.globalCompositeOperation = 'lighter';
+  const waveCount = 5;
+  for (let i = 0; i < waveCount; i++) {
+    const radius = ((time * (42 + i * 6) + i * 130) % (Math.max(W, H) * 0.9)) + features.bass * 90;
+    canvasCtx.strokeStyle = i % 2 ? colors.accent : colors.second;
+    canvasCtx.globalAlpha = clamp(0.20 - i * 0.024 + features.energy * 0.20, 0.04, 0.42);
+    canvasCtx.lineWidth = 1.5 + features.bass * 8 + i * 0.55;
+    canvasCtx.beginPath();
+    canvasCtx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+    canvasCtx.stroke();
+  }
+
+  const gridLines = 12;
+  canvasCtx.globalAlpha = 0.10 + features.highs * 0.12;
+  canvasCtx.strokeStyle = colors.white;
+  canvasCtx.lineWidth = 1;
+  for (let i = 0; i < gridLines; i++) {
+    const y = (H / gridLines) * i + Math.sin(time * 0.8 + i) * (12 + features.mids * 42);
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(0, y);
+    for (let x = 0; x <= W; x += 80) {
+      canvasCtx.lineTo(x, y + Math.sin(time + x * 0.012 + i) * (10 + features.bass * 34));
+    }
+    canvasCtx.stroke();
+  }
+  canvasCtx.restore();
+}
+
+function renderFrameBase(poseLandmarks) {
+  const wantsFullscreen = visualSettings.backgroundMode === 'magic' ||
+    visualSettings.avatarStyle === 'magic' ||
+    visualSettings.avatarStyle === 'magic2';
+  setAvatarCanvasLayout(wantsFullscreen ? 'fullscreen' : 'normal');
+
+  if (visualSettings.backgroundMode === 'magic') {
+    renderMagicBackground(poseLandmarks);
+  } else {
+    clearAvatarCanvas();
+  }
+}
+
+function getRegularAvatarStageMetrics() {
+  return {
+    x: 0,
+    y: 0,
+    width: canvasElement.clientWidth,
+    height: canvasElement.clientHeight
+  };
+}
+
+function renderMagicAvatar(poseLandmarks) {
+  renderFrameBase(poseLandmarks);
+
+  const variant = visualSettings.avatarStyle === 'magic2' ? 'magic2' : 'magic';
+  const isMagic2 = variant === 'magic2';
+  const projected = projectMagicPose(poseLandmarks);
+  const features = getMagicAudioFeatures();
+  const colors = getMagicColors(features, variant);
+  const W = canvasElement.clientWidth;
+  const H = canvasElement.clientHeight;
+  const time = performance.now() * 0.001;
+
+  if (!projected || !projected.points) {
+    magicState.idleSpin += 0.012 + features.energy * 0.03;
+    const idleCenter = {
+      x: W * 0.5,
+      y: H * 0.48
+    };
+    canvasCtx.save();
+    canvasCtx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 7; i++) {
+      const angle = magicState.idleSpin + i * Math.PI * 2 / 7;
+      const r = 80 + i * 18 + features.bass * 120;
+      canvasCtx.strokeStyle = i % 2 ? colors.accent : colors.second;
+      canvasCtx.globalAlpha = 0.18 + features.energy * 0.22;
+      canvasCtx.lineWidth = 1 + features.mids * 5;
+      canvasCtx.beginPath();
+      canvasCtx.ellipse(idleCenter.x, idleCenter.y, r, r * 0.36, angle, 0, Math.PI * 2);
+      canvasCtx.stroke();
+    }
+    canvasCtx.restore();
+
+    for (let i = 0; i < MAGIC_CONFIG.idleParticleRate + Math.round(features.highs * 4); i++) {
+      emitMagicParticle(
+        idleCenter.x + Math.cos(time + i) * 60,
+        idleCenter.y + Math.sin(time * 1.2 + i) * 50,
+        i % 2 ? colors.accent : colors.second,
+        0.25 + features.energy,
+        time + i
+      );
+    }
+    updateAndDrawMagicParticles(features, colors);
+    magicState.previousPoints = null;
+    return;
+  }
+
+  const points = projected.points;
+  const motionEnergy = measureMagicMotion(points);
+  const intensity = clamp((features.energy * features.reactive + motionEnergy * 1.35) / 2, 0, 1.6);
+  const thickness = visualSettings.avatarThickness || 1;
+  const headScale = visualSettings.avatarHeadScale || 1;
+  const trailAlpha = clamp(0.10 + intensity * 0.18, 0.10, 0.38);
+  const pulse = 1 + features.bass * 0.7 + motionEnergy * 0.65;
+  const torso = points[1] && points[2] && points[7] && points[8]
+    ? {
+        x: (points[1].x + points[2].x + points[7].x + points[8].x) / 4,
+        y: (points[1].y + points[2].y + points[7].y + points[8].y) / 4
+      }
+    : projected.center;
+
+  magicState.pulse = magicState.pulse * 0.86 + pulse * 0.14;
+  rememberMagicTrails(points);
+
+  canvasCtx.save();
+  canvasCtx.globalCompositeOperation = 'lighter';
+  canvasCtx.lineCap = 'round';
+  canvasCtx.lineJoin = 'round';
+
+  // Trails from every joint: slow movement is smooth, fast movement makes brighter streaks.
+  for (let i = 0; i < magicState.trails.length; i++) {
+    const trail = magicState.trails[i];
+    if (trail.length < 2) continue;
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(trail[0].x, trail[0].y);
+    for (let j = 1; j < trail.length; j++) {
+      const prev = trail[j - 1];
+      const current = trail[j];
+      const midX = (prev.x + current.x) / 2;
+      const midY = (prev.y + current.y) / 2;
+      canvasCtx.quadraticCurveTo(prev.x, prev.y, midX, midY);
+    }
+    canvasCtx.strokeStyle = i % 2 ? colors.accent : colors.second;
+    canvasCtx.globalAlpha = trailAlpha * (i === 5 || i === 6 ? 1.45 : 1);
+    canvasCtx.lineWidth = clamp((2 + features.mids * 10 + motionEnergy * 8) * thickness, 1, 22);
+    canvasCtx.stroke();
+  }
+
+  // Magic keeps visible animated body ribbons; Magic-2 turns invisible body segments into screen-edge beam emitters.
+  MAGIC_CONNECTIONS.forEach(([a, b], index) => {
+    const pa = points[a];
+    const pb = points[b];
+    if (!pa || !pb) return;
+
+    const dx = pb.x - pa.x;
+    const dy = pb.y - pa.y;
+
+    if (!isMagic2) {
+      const normalX = -dy * 0.11 * Math.sin(time * 2.2 + index);
+      const normalY = dx * 0.11 * Math.cos(time * 1.9 + index);
+      const curveX = (pa.x + pb.x) / 2 + normalX * (0.35 + features.mids + motionEnergy);
+      const curveY = (pa.y + pb.y) / 2 + normalY * (0.35 + features.mids + motionEnergy);
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(pa.x, pa.y);
+      canvasCtx.quadraticCurveTo(curveX, curveY, pb.x, pb.y);
+      canvasCtx.strokeStyle = index % 3 === 0 ? colors.accent : (index % 3 === 1 ? colors.second : colors.white);
+      canvasCtx.globalAlpha = clamp(0.30 + intensity * 0.28, 0.22, 0.82);
+      canvasCtx.lineWidth = clamp((3.5 + features.mids * 13 + features.bass * 7) * thickness, 2, 30);
+      canvasCtx.stroke();
+      return;
+    }
+
+    const segmentAngle = Math.atan2(dy, dx);
+    const samples = 2 + Math.round(features.mids * 2 + motionEnergy * 3);
+
+    for (let sample = 0; sample < samples; sample++) {
+      const t = (sample + 1) / (samples + 1);
+      const wave = Math.sin(time * (2.2 + features.highs * 3.5) + index * 1.7 + sample * 2.4);
+      const side = ((index + sample) % 2 === 0 ? 1 : -1);
+      const emitter = {
+        x: pa.x + dx * t + (-dy) * 0.10 * wave,
+        y: pa.y + dy * t + dx * 0.10 * wave
+      };
+      const angle = segmentAngle
+        + side * (Math.PI / 2 + 0.25 + features.bass * 0.8)
+        + wave * (0.55 + motionEnergy * 1.1);
+      const edge = getMagicBorderPoint(emitter, angle, W, H);
+      const ctrlDistance = 70 + features.bass * 180 + motionEnergy * 150;
+      const ctrl = {
+        x: emitter.x + Math.cos(angle + side * 0.8) * ctrlDistance,
+        y: emitter.y + Math.sin(angle + side * 0.8) * ctrlDistance
+      };
+      const beamColor = (index + sample) % 3 === 0 ? colors.accent : ((index + sample) % 3 === 1 ? colors.second : colors.white);
+
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(emitter.x, emitter.y);
+      canvasCtx.quadraticCurveTo(ctrl.x, ctrl.y, edge.x, edge.y);
+      canvasCtx.strokeStyle = beamColor;
+      canvasCtx.globalAlpha = clamp(0.10 + intensity * 0.22 + features.highs * 0.14, 0.08, 0.56);
+      canvasCtx.lineWidth = clamp((1.1 + features.mids * 7 + motionEnergy * 6) * thickness, 0.8, 16);
+      canvasCtx.stroke();
+
+      if (features.highs + motionEnergy > 0.42 && sample === 0) {
+        emitMagicParticle(emitter.x, emitter.y, beamColor, intensity, angle);
+      }
+    }
+  });
+
+  // Mesh polygons around torso and extremities.
+  const meshSets = [
+    [1, 2, 8, 7],
+    [1, 3, 5, 6, 4, 2],
+    [7, 9, 11, 12, 10, 8]
+  ];
+  meshSets.forEach((set, i) => {
+    const first = points[set[0]];
+    if (!first) return;
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(first.x, first.y);
+    for (let j = 1; j < set.length; j++) {
+      const point = points[set[j]];
+      if (point) canvasCtx.lineTo(point.x, point.y);
+    }
+    canvasCtx.closePath();
+    canvasCtx.globalAlpha = clamp(0.08 + features.bass * 0.16 + motionEnergy * 0.15, 0.06, 0.38);
+    canvasCtx.fillStyle = i === 1 ? colors.accent : colors.second;
+    canvasCtx.fill();
+    canvasCtx.globalAlpha = clamp(0.22 + features.highs * 0.35, 0.16, 0.68);
+    canvasCtx.strokeStyle = colors.white;
+    canvasCtx.lineWidth = 1 + features.highs * 3;
+    canvasCtx.stroke();
+  });
+
+  // Torso halo/portal controlled by body center.
+  const haloRadius = projected.shoulderW * (1.35 + features.bass * 1.7 + motionEnergy * 0.8);
+  canvasCtx.globalAlpha = clamp(0.16 + features.bass * 0.42, 0.12, 0.72);
+  canvasCtx.strokeStyle = colors.accent;
+  canvasCtx.lineWidth = clamp((2 + features.bass * 12) * thickness, 1, 22);
+  canvasCtx.beginPath();
+  canvasCtx.ellipse(torso.x, torso.y, haloRadius, haloRadius * (0.42 + features.mids * 0.35), time * 0.9 + motionEnergy, 0, Math.PI * 2);
+  canvasCtx.stroke();
+
+  // Nodes keep the human body readable.
+  points.forEach((point, index) => {
+    if (!point) return;
+    const isHand = index === 5 || index === 6;
+    const isFoot = index === 11 || index === 12;
+    const radius = (isHand ? 8 : isFoot ? 6 : 5) * headScale * (0.85 + features.bass * 0.55 + motionEnergy * 0.45);
+    const gradient = canvasCtx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius * 3.2);
+    gradient.addColorStop(0, colors.white);
+    gradient.addColorStop(0.35, index % 2 ? colors.accent : colors.second);
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    canvasCtx.globalAlpha = isHand ? 0.95 : 0.72;
+    canvasCtx.fillStyle = gradient;
+    canvasCtx.beginPath();
+    canvasCtx.arc(point.x, point.y, radius * 3.2, 0, Math.PI * 2);
+    canvasCtx.fill();
+  });
+
+  canvasCtx.restore();
+
+  // Emitters: hands and feet throw sparks/waves, more on highs and fast motion.
+  const emitCount = Math.round(1 + features.highs * 7 + motionEnergy * 8);
+  MAGIC_CONFIG.emitters.forEach((idx, emitterIndex) => {
+    const point = points[idx];
+    const previous = magicState.previousPoints && magicState.previousPoints[idx];
+    if (!point) return;
+    const angleBias = previous ? Math.atan2(point.y - previous.y, point.x - previous.x) : time + emitterIndex;
+    for (let i = 0; i < emitCount; i++) {
+      emitMagicParticle(point.x, point.y, emitterIndex % 2 ? colors.accent : colors.second, intensity, angleBias);
+    }
+  });
+
+  updateAndDrawMagicParticles(features, colors);
+  magicState.previousPoints = points.map(point => point ? { x: point.x, y: point.y } : null);
 }
 
 function normalizeHexColor(value, fallback) {
@@ -2514,7 +3049,7 @@ function getAvatarPalette() {
 
 function applyVisualSettings(settings) {
   visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS, settings || {});
-  visualSettings.avatarStyle = ['robot', 'myHead', 'neon', 'wire', 'leSaint'].includes(visualSettings.avatarStyle)
+  visualSettings.avatarStyle = ['robot', 'myHead', 'neon', 'wire', 'leSaint', 'magic', 'magic2'].includes(visualSettings.avatarStyle)
     ? visualSettings.avatarStyle
     : DEFAULT_VISUAL_SETTINGS.avatarStyle;
   visualSettings.avatarColor = normalizeHexColor(visualSettings.avatarColor, DEFAULT_VISUAL_SETTINGS.avatarColor);
@@ -2522,7 +3057,7 @@ function applyVisualSettings(settings) {
   visualSettings.avatarHeadScale = normalizeAvatarHeadScale(visualSettings.avatarHeadScale);
   visualSettings.musicReactivity = normalizePercentSlider(visualSettings.musicReactivity, DEFAULT_VISUAL_SETTINGS.musicReactivity);
   visualSettings.motionAmount = normalizePercentSlider(visualSettings.motionAmount, DEFAULT_VISUAL_SETTINGS.motionAmount);
-  visualSettings.backgroundMode = ['none', 'solid', 'gradient'].includes(visualSettings.backgroundMode)
+  visualSettings.backgroundMode = ['none', 'solid', 'gradient', 'magic'].includes(visualSettings.backgroundMode)
     ? visualSettings.backgroundMode
     : DEFAULT_VISUAL_SETTINGS.backgroundMode;
   visualSettings.backgroundColor = normalizeHexColor(visualSettings.backgroundColor, DEFAULT_VISUAL_SETTINGS.backgroundColor);
@@ -2538,7 +3073,6 @@ function applyVisualSettings(settings) {
   if (avatarHeadPictureControls) {
     avatarHeadPictureControls.style.display = visualSettings.avatarStyle === 'myHead' ? '' : 'none';
   }
-
   document.body.classList.toggle('dancing5-bg-gradient', visualSettings.backgroundMode === 'gradient');
   if (visualSettings.backgroundMode === 'solid') {
     document.body.style.backgroundColor = visualSettings.backgroundColor;
@@ -2617,9 +3151,10 @@ if (backgroundColorInput) backgroundColorInput.addEventListener('input', readVis
 initializeHeadPictureSelect();
 updateAudioInputGain(audioInputGainSlider ? audioInputGainSlider.value : audioInputGain);
 applyVisualSettings(visualSettings);
+hideLoadingSplash();
 
 function drawRobotBoy(poseLandmarks) {
-  clearAvatarCanvas();
+  renderFrameBase(poseLandmarks);
 
   const lm = poseLandmarks;
   if (!lm || lm.length < 13) return;
@@ -2640,10 +3175,11 @@ function drawRobotBoy(poseLandmarks) {
   const perspective = zoom;
   const viewerDistance = 800;
 
-  const W = canvasElement.clientWidth;
-  const H = canvasElement.clientHeight;
-  const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
-  const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
+  const stage = getRegularAvatarStageMetrics();
+  const W = stage.width;
+  const H = stage.height;
+  const stageCenterX = stage.x + W / 2;
+  const stageCenterY = stage.y + H / 2;
 
   function project3D(x, y, z) {
     z = z / 2;
@@ -2666,12 +3202,15 @@ function drawRobotBoy(poseLandmarks) {
     const p = lm[idx];
 
     if (!p) {
-      return { x: W / 2, y: H / 2 };
+      return { x: stageCenterX, y: stageCenterY };
     }
 
     const proj = project3D(p.x - cx, p.y - cy, p.z);
 
-    return projectAvatarPoint(proj, W, H, canvasCenterX, canvasCenterY, scale);
+    return {
+      x: proj.x * W * scale + stageCenterX,
+      y: proj.y * H * scale + stageCenterY
+    };
   }
 
   function drawSegment(pa, pb, lmA, lmB, w, fill, stroke = "#1a2248", depthFactor = 0.2) {
@@ -2771,14 +3310,14 @@ function drawRobotBoy(poseLandmarks) {
   const VISOR = palette.visor;
   const ACCENT = palette.accent;
 
-  let p11 = pt(LS);
-  let p12 = pt(RS);
-  let p13 = pt(LE);
-  let p14 = pt(RE);
-  let p15 = pt(LW);
-  let p16 = pt(RW);
-  let p23 = pt(LH);
-  let p24 = pt(RH);
+  const p11 = pt(LS);
+  const p12 = pt(RS);
+  const p13 = pt(LE);
+  const p14 = pt(RE);
+  const p15 = pt(LW);
+  const p16 = pt(RW);
+  const p23 = pt(LH);
+  const p24 = pt(RH);
   const p25 = pt(LK);
   const p26 = pt(RK);
   const p27 = pt(LA);
@@ -2790,20 +3329,12 @@ function drawRobotBoy(poseLandmarks) {
   );
 
   // Dampen shoulder-derived scale so the full avatar size varies less between frames.
-  const dynamicShoulderW = clamp(rawShoulderW * W * scale * 0.75, 45, 150);
+  const dynamicShoulderW = clamp(rawShoulderW * W * scale * 0.75, 45, 180);
   const shoulderW = clamp(
     AVATAR_REFERENCE_SHOULDER_WIDTH + (dynamicShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * AVATAR_SIZE_VARIATION_FACTOR,
     55,
-    125
+    145
   );
-
-  [p11, p12] = clampPairSpread(p11, p12, shoulderW * 0.72, shoulderW * 1.18);
-  [p23, p24] = clampPairSpread(p23, p24, shoulderW * 0.55, shoulderW * 1.05);
-
-  p13 = clampPointToDistance(p13, p11, shoulderW * 1.15);
-  p14 = clampPointToDistance(p14, p12, shoulderW * 1.15);
-  p15 = clampPointToDistance(p15, p13, shoulderW * 1.2);
-  p16 = clampPointToDistance(p16, p14, shoulderW * 1.2);
 
   // Robot part sizes
   const torsoW = clamp(shoulderW * 1.35, 55, 220);
@@ -2970,11 +3501,10 @@ function drawSkewedRoundBox(x, y, w, h, skew, radius, fill, stroke, lineWidth) {
   const nose = lm[NOSE];
   if (!nose) return;
 
-  const nProj = project3D(nose.x - cx, nose.y - cy, 0);
+  const nProj = project3D(nose.x - cx, nose.y - cy, nose.z / 4);
 
-  const nPoint = projectAvatarPoint(nProj, W, H, canvasCenterX, canvasCenterY, scale);
-  const nX = nPoint.x;
-  const nY = nPoint.y;
+  const nX = nProj.x * W * scale + stageCenterX;
+  const nY = nProj.y * H * scale + stageCenterY;
 
   const headSizeScale = visualSettings.avatarHeadScale || 1;
   const hW = clamp(shoulderW * 1.35 * headSizeScale, 35, 430);
@@ -3171,18 +3701,24 @@ const faceSkew = headSkew * 0.55;
 }
  
 function drawBoy(dtx) {
+  if (visualSettings.avatarStyle === "magic" || visualSettings.avatarStyle === "magic2") {
+    renderMagicAvatar(dtx);
+    return;
+  }
+
   if (visualSettings.avatarStyle !== "leSaint") {
     drawRobotBoy(dtx);
     return;
   }
 
 	
-     clearAvatarCanvas();
+     renderFrameBase(dtx);
     const scale = AVATAR_DRAW_SCALE;
     const perspective = zoom; // Use zoom as the perspective depth factor
     const viewerDistance = 800; // Simulate distance of the viewer from the projection plane
-    const W = canvasElement.clientWidth;
-    const H = canvasElement.clientHeight;
+    const stage = getRegularAvatarStageMetrics();
+    const W = stage.width;
+    const H = stage.height;
 
 	
     canvasCtx.strokeStyle = visualSettings.avatarColor;
@@ -3234,42 +3770,20 @@ function drawBoy(dtx) {
         // Get the center position to adjust the model to the middle of the canvas
         const centerX = (poseLandmarks[1].x + poseLandmarks[2].x + poseLandmarks[7].x + poseLandmarks[8].x) / 4;
         const centerY = (poseLandmarks[1].y + poseLandmarks[2].y + poseLandmarks[7].y + poseLandmarks[8].y) / 4;
-        const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
-        const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
-        const displayPoints = poseLandmarks.map(point => {
-            if (!point) return null;
-            const projected = project3D(point.x - centerX, point.y - centerY, point.z);
-            return projectAvatarPoint(projected, W, H, canvasCenterX, canvasCenterY, scale);
-        });
-
-        const rawSaintShoulderW = displayPoints[1] && displayPoints[2]
-            ? Math.hypot(displayPoints[1].x - displayPoints[2].x, displayPoints[1].y - displayPoints[2].y)
-            : AVATAR_REFERENCE_SHOULDER_WIDTH;
-        const saintShoulderW = clamp(
-            AVATAR_REFERENCE_SHOULDER_WIDTH + (rawSaintShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * AVATAR_SIZE_VARIATION_FACTOR,
-            55,
-            125
-        );
-        [displayPoints[1], displayPoints[2]] = clampPairSpread(displayPoints[1], displayPoints[2], saintShoulderW * 0.72, saintShoulderW * 1.18);
-        [displayPoints[7], displayPoints[8]] = clampPairSpread(displayPoints[7], displayPoints[8], saintShoulderW * 0.55, saintShoulderW * 1.05);
-
-        const armSegmentLimits = {
-            '1-3': saintShoulderW * 1.15,
-            '2-4': saintShoulderW * 1.15,
-            '3-5': saintShoulderW * 1.2,
-            '4-6': saintShoulderW * 1.2
-        };
+        const canvasCenterX = stage.x + W / 2;
+        const canvasCenterY = stage.y + H / 2;
 
         connections.forEach(([startIdx, endIdx]) => {
-            const startPoint = displayPoints[startIdx];
-            let endPoint = displayPoints[endIdx];
-            if (startPoint && endPoint) {
-                endPoint = clampPointToDistance(endPoint, startPoint, armSegmentLimits[`${startIdx}-${endIdx}`]);
+            const start = poseLandmarks[startIdx];
+            const end = poseLandmarks[endIdx];
+            if (start && end) {
+                const startProj = project3D(start.x - centerX, start.y - centerY, start.z);
+                const endProj = project3D(end.x - centerX, end.y - centerY, end.z);
 
-                const startX = startPoint.x;
-                const startY = startPoint.y;
-                const endX = endPoint.x;
-                const endY = endPoint.y;
+                const startX = startProj.x * W * scale + canvasCenterX;
+                const startY = startProj.y * H * scale + canvasCenterY;
+                const endX = endProj.x * W * scale + canvasCenterX;
+                const endY = endProj.y * H * scale + canvasCenterY;
 
                 canvasCtx.beginPath();
                 canvasCtx.moveTo(startX, startY);
@@ -3281,10 +3795,9 @@ function drawBoy(dtx) {
         // Draw head with corrected position and reduced size
         const nose = poseLandmarks[0]; // Using the nose as an example
         if (nose) {
-            const nosePoint = displayPoints[0];
-            if (!nosePoint) return;
-            const noseX = nosePoint.x;
-            const noseY = nosePoint.y;
+            const noseProj = project3D(nose.x - centerX, nose.y - centerY, nose.z/4 );
+            const noseX = noseProj.x * W * scale + canvasCenterX;
+            const noseY = noseProj.y * H * scale + canvasCenterY;
 
             // Reduced head size to make it proportional
             const headDiameter = 10 * (visualSettings.avatarHeadScale || 1) * (perspective / viewerDistance);
@@ -3310,13 +3823,20 @@ function drawBoy(dtx) {
 // Update rotation around Y-axis from slider input (moving the camera around the subject)
 function updateRotationY(value) {
     cameraAngleY = parseFloat(value);
-    scheduleLastSessionSave();
 }
 
 // Update rotation around X-axis from slider input (moving the camera around the subject)
 function updateRotationX(value) {
     cameraAngleX = parseFloat(value);
-    scheduleLastSessionSave();
+}
+
+function resetRotationControls() {
+    cameraAngleX = 0;
+    cameraAngleY = 0;
+    const rotationXSlider = document.getElementById('rotation-x-slider');
+    const rotationYSlider = document.getElementById('rotation-y-slider');
+    if (rotationXSlider) rotationXSlider.value = '0';
+    if (rotationYSlider) rotationYSlider.value = '0';
 }
 
 // Update zoom level from slider input
@@ -3363,18 +3883,30 @@ function visualize()
   if (flagLearned == 0) {
     if (allPos && allPos.length > 0) {
       drawBoy(allPos);
+    } else if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') {
+      renderMagicAvatar(null);
     }
     return;
   }
 
   // MODE AI / MODEL
   // Here we need audio FFT data.
-  if (!newDt) return;
+  if (!newDt) {
+    if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') renderMagicAvatar(null);
+    return;
+  }
 
   if (flagLearned == 1 && newDt)
   {
-    if (!network) return;
+    if (!network) {
+      if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') renderMagicAvatar(null);
+      return;
+    }
     if (network.weights.length == 0) {
+      if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') {
+        renderMagicAvatar(null);
+        return;
+      }
       alert("Model not trained ^^");
       return;
     }
@@ -3846,6 +4378,7 @@ function loadModel(modelName) {
 				if(len > 5)document.getElementById("hidden-layer-4").value = arrHidden[4];
 				else document.getElementById("hidden-layer-4").value = 0;
 
+				resetRotationControls();
 				await saveLastSession(modelName);
 				resolve(model);
 			} catch (error) {
@@ -3903,8 +4436,6 @@ function getTrainingSettingsSnapshot() {
     iterations: iterationsSlider ? parseInt(iterationsSlider.value, 10) : null,
     learnTimeSeconds: timeLearn,
     camera: {
-      rotationY: cameraAngleY,
-      rotationX: cameraAngleX,
       zoom: zoom
     }
   };
@@ -3927,6 +4458,8 @@ function getSessionSettingsSnapshot(modelName) {
 
 function applySettingsSnapshot(settings) {
   if (!settings) return;
+
+  resetRotationControls();
 
   const headPictureSetting = settings.selectedAvatarImageId || settings.headPictureName;
   if (headPictureSetting) setCustomHeadPicture(headPictureSetting);
@@ -3959,16 +4492,6 @@ function applySettingsSnapshot(settings) {
     }
 
     if (settings.training.camera) {
-      if (typeof settings.training.camera.rotationY === 'number') {
-        updateRotationY(settings.training.camera.rotationY);
-        const slider = document.getElementById('rotation-y-slider');
-        if (slider) slider.value = settings.training.camera.rotationY;
-      }
-      if (typeof settings.training.camera.rotationX === 'number') {
-        updateRotationX(settings.training.camera.rotationX);
-        const slider = document.getElementById('rotation-x-slider');
-        if (slider) slider.value = settings.training.camera.rotationX;
-      }
       if (typeof settings.training.camera.zoom === 'number') {
         updateZoom(settings.training.camera.zoom);
         const slider = document.getElementById('zoom-slider');
@@ -4517,7 +5040,10 @@ function flipFull()
   if( flagPannel == true )
   {
     flagPannel = false;
+    setMainControlsVisible(false);
     setModelManagerVisible(false);
+    if (avatarVisualPanel) avatarVisualPanel.style.display = 'none';
+    if (avatarVisualToggle) avatarVisualToggle.setAttribute('aria-expanded', 'false');
     document.getElementById("canvas-container").style.display="";
     document.getElementById("content").style.display="none";
     //document.getElementById("fliptrain").innerHTML = "Avatar";
@@ -4527,7 +5053,10 @@ function flipFull()
   {
     //return;
     flagPannel = true;
-    setModelManagerVisible(true);
+    setMainControlsVisible(false);
+    setModelManagerVisible(false);
+    if (avatarVisualPanel) avatarVisualPanel.style.display = 'none';
+    if (avatarVisualToggle) avatarVisualToggle.setAttribute('aria-expanded', 'false');
     document.getElementById("canvas-container").style.display="none";
     document.getElementById("content").style.display="";
     //document.getElementById("fliptrain").innerHTML = "Trainning";

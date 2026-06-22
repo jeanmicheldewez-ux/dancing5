@@ -2358,11 +2358,63 @@ let cameraAngleY = 0; // Initial camera angle around Y-axis in radians
 let cameraAngleX = 0; // Initial camera angle around X-axis in radians
 let zoom = 1700; // Zoom factor (controls how far the viewer is from the object)
 const AVATAR_DRAW_SCALE = 0.48;
-const AVATAR_SIZE_VARIATION_FACTOR = 0.5;
+const AVATAR_CENTER_X_RATIO = 0.5;
+const AVATAR_CENTER_Y_RATIO = 0.47;
+const AVATAR_SIZE_VARIATION_FACTOR = 0.35;
 const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
+const AVATAR_MAX_WIDTH_RATIO = 0.34;
+const AVATAR_MAX_HEIGHT_RATIO = 0.44;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function clampPointToDistance(point, anchor, maxDistance) {
+  if (!point || !anchor || !Number.isFinite(maxDistance) || maxDistance <= 0) return point;
+
+  const dx = point.x - anchor.x;
+  const dy = point.y - anchor.y;
+  const distance = Math.hypot(dx, dy);
+  if (!distance || distance <= maxDistance) return point;
+
+  const ratio = maxDistance / distance;
+  return {
+    x: anchor.x + dx * ratio,
+    y: anchor.y + dy * ratio
+  };
+}
+
+function clampPairSpread(leftPoint, rightPoint, minDistance, maxDistance) {
+  if (!leftPoint || !rightPoint) return [leftPoint, rightPoint];
+
+  const mid = {
+    x: (leftPoint.x + rightPoint.x) / 2,
+    y: (leftPoint.y + rightPoint.y) / 2
+  };
+  const dx = leftPoint.x - rightPoint.x;
+  const dy = leftPoint.y - rightPoint.y;
+  const distance = Math.hypot(dx, dy);
+  const targetDistance = clamp(distance || minDistance, minDistance, maxDistance);
+  const ux = distance ? dx / distance : -1;
+  const uy = distance ? dy / distance : 0;
+
+  return [
+    {
+      x: mid.x + ux * targetDistance / 2,
+      y: mid.y + uy * targetDistance / 2
+    },
+    {
+      x: mid.x - ux * targetDistance / 2,
+      y: mid.y - uy * targetDistance / 2
+    }
+  ];
+}
+
+function projectAvatarPoint(proj, width, height, centerX, centerY, scale) {
+  return {
+    x: centerX + clamp(proj.x * width * scale, -width * AVATAR_MAX_WIDTH_RATIO, width * AVATAR_MAX_WIDTH_RATIO),
+    y: centerY + clamp(proj.y * height * scale, -height * AVATAR_MAX_HEIGHT_RATIO, height * AVATAR_MAX_HEIGHT_RATIO)
+  };
 }
 
 function normalizeHexColor(value, fallback) {
@@ -2590,6 +2642,8 @@ function drawRobotBoy(poseLandmarks) {
 
   const W = canvasElement.clientWidth;
   const H = canvasElement.clientHeight;
+  const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
+  const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
 
   function project3D(x, y, z) {
     z = z / 2;
@@ -2617,10 +2671,7 @@ function drawRobotBoy(poseLandmarks) {
 
     const proj = project3D(p.x - cx, p.y - cy, p.z);
 
-    return {
-      x: proj.x * W * scale + W / 2,
-      y: proj.y * H * scale + H / 2
-    };
+    return projectAvatarPoint(proj, W, H, canvasCenterX, canvasCenterY, scale);
   }
 
   function drawSegment(pa, pb, lmA, lmB, w, fill, stroke = "#1a2248", depthFactor = 0.2) {
@@ -2720,14 +2771,14 @@ function drawRobotBoy(poseLandmarks) {
   const VISOR = palette.visor;
   const ACCENT = palette.accent;
 
-  const p11 = pt(LS);
-  const p12 = pt(RS);
-  const p13 = pt(LE);
-  const p14 = pt(RE);
-  const p15 = pt(LW);
-  const p16 = pt(RW);
-  const p23 = pt(LH);
-  const p24 = pt(RH);
+  let p11 = pt(LS);
+  let p12 = pt(RS);
+  let p13 = pt(LE);
+  let p14 = pt(RE);
+  let p15 = pt(LW);
+  let p16 = pt(RW);
+  let p23 = pt(LH);
+  let p24 = pt(RH);
   const p25 = pt(LK);
   const p26 = pt(RK);
   const p27 = pt(LA);
@@ -2739,12 +2790,20 @@ function drawRobotBoy(poseLandmarks) {
   );
 
   // Dampen shoulder-derived scale so the full avatar size varies less between frames.
-  const dynamicShoulderW = clamp(rawShoulderW * W * scale * 0.75, 45, 180);
+  const dynamicShoulderW = clamp(rawShoulderW * W * scale * 0.75, 45, 150);
   const shoulderW = clamp(
     AVATAR_REFERENCE_SHOULDER_WIDTH + (dynamicShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * AVATAR_SIZE_VARIATION_FACTOR,
     55,
-    145
+    125
   );
+
+  [p11, p12] = clampPairSpread(p11, p12, shoulderW * 0.72, shoulderW * 1.18);
+  [p23, p24] = clampPairSpread(p23, p24, shoulderW * 0.55, shoulderW * 1.05);
+
+  p13 = clampPointToDistance(p13, p11, shoulderW * 1.15);
+  p14 = clampPointToDistance(p14, p12, shoulderW * 1.15);
+  p15 = clampPointToDistance(p15, p13, shoulderW * 1.2);
+  p16 = clampPointToDistance(p16, p14, shoulderW * 1.2);
 
   // Robot part sizes
   const torsoW = clamp(shoulderW * 1.35, 55, 220);
@@ -2911,10 +2970,11 @@ function drawSkewedRoundBox(x, y, w, h, skew, radius, fill, stroke, lineWidth) {
   const nose = lm[NOSE];
   if (!nose) return;
 
-  const nProj = project3D(nose.x - cx, nose.y - cy, nose.z / 4);
+  const nProj = project3D(nose.x - cx, nose.y - cy, 0);
 
-  const nX = nProj.x * W * scale + W / 2;
-  const nY = nProj.y * H * scale + H / 2;
+  const nPoint = projectAvatarPoint(nProj, W, H, canvasCenterX, canvasCenterY, scale);
+  const nX = nPoint.x;
+  const nY = nPoint.y;
 
   const headSizeScale = visualSettings.avatarHeadScale || 1;
   const hW = clamp(shoulderW * 1.35 * headSizeScale, 35, 430);
@@ -3174,20 +3234,42 @@ function drawBoy(dtx) {
         // Get the center position to adjust the model to the middle of the canvas
         const centerX = (poseLandmarks[1].x + poseLandmarks[2].x + poseLandmarks[7].x + poseLandmarks[8].x) / 4;
         const centerY = (poseLandmarks[1].y + poseLandmarks[2].y + poseLandmarks[7].y + poseLandmarks[8].y) / 4;
-        const canvasCenterX = W / 2;
-        const canvasCenterY = H / 2;
+        const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
+        const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
+        const displayPoints = poseLandmarks.map(point => {
+            if (!point) return null;
+            const projected = project3D(point.x - centerX, point.y - centerY, point.z);
+            return projectAvatarPoint(projected, W, H, canvasCenterX, canvasCenterY, scale);
+        });
+
+        const rawSaintShoulderW = displayPoints[1] && displayPoints[2]
+            ? Math.hypot(displayPoints[1].x - displayPoints[2].x, displayPoints[1].y - displayPoints[2].y)
+            : AVATAR_REFERENCE_SHOULDER_WIDTH;
+        const saintShoulderW = clamp(
+            AVATAR_REFERENCE_SHOULDER_WIDTH + (rawSaintShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * AVATAR_SIZE_VARIATION_FACTOR,
+            55,
+            125
+        );
+        [displayPoints[1], displayPoints[2]] = clampPairSpread(displayPoints[1], displayPoints[2], saintShoulderW * 0.72, saintShoulderW * 1.18);
+        [displayPoints[7], displayPoints[8]] = clampPairSpread(displayPoints[7], displayPoints[8], saintShoulderW * 0.55, saintShoulderW * 1.05);
+
+        const armSegmentLimits = {
+            '1-3': saintShoulderW * 1.15,
+            '2-4': saintShoulderW * 1.15,
+            '3-5': saintShoulderW * 1.2,
+            '4-6': saintShoulderW * 1.2
+        };
 
         connections.forEach(([startIdx, endIdx]) => {
-            const start = poseLandmarks[startIdx];
-            const end = poseLandmarks[endIdx];
-            if (start && end) {
-                const startProj = project3D(start.x - centerX, start.y - centerY, start.z);
-                const endProj = project3D(end.x - centerX, end.y - centerY, end.z);
+            const startPoint = displayPoints[startIdx];
+            let endPoint = displayPoints[endIdx];
+            if (startPoint && endPoint) {
+                endPoint = clampPointToDistance(endPoint, startPoint, armSegmentLimits[`${startIdx}-${endIdx}`]);
 
-                const startX = startProj.x * W * scale + canvasCenterX;
-                const startY = startProj.y * H * scale + canvasCenterY;
-                const endX = endProj.x * W * scale + canvasCenterX;
-                const endY = endProj.y * H * scale + canvasCenterY;
+                const startX = startPoint.x;
+                const startY = startPoint.y;
+                const endX = endPoint.x;
+                const endY = endPoint.y;
 
                 canvasCtx.beginPath();
                 canvasCtx.moveTo(startX, startY);
@@ -3199,12 +3281,13 @@ function drawBoy(dtx) {
         // Draw head with corrected position and reduced size
         const nose = poseLandmarks[0]; // Using the nose as an example
         if (nose) {
-            const noseProj = project3D(nose.x - centerX, nose.y - centerY, nose.z/4 );
-            const noseX = noseProj.x * W * scale + canvasCenterX;
-            const noseY = noseProj.y * H * scale + canvasCenterY;
+            const nosePoint = displayPoints[0];
+            if (!nosePoint) return;
+            const noseX = nosePoint.x;
+            const noseY = nosePoint.y;
 
             // Reduced head size to make it proportional
-            const headDiameter = 10 * (perspective / (viewerDistance - nose.z));
+            const headDiameter = 10 * (visualSettings.avatarHeadScale || 1) * (perspective / viewerDistance);
             canvasCtx.beginPath();
             canvasCtx.arc(noseX, noseY, headDiameter / 2, 0, 2 * Math.PI);
             canvasCtx.fillStyle = visualSettings.avatarColor;

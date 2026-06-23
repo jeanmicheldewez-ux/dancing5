@@ -38,6 +38,7 @@ let flagPannel = true;
  
  
 const createModelBtn = document.getElementById('create-model-btn');
+const deleteModelBtn = document.getElementById('delete-model-btn');
 const trainModelBtn = document.getElementById('train-model-btn');
 const saveModelBtn = document.getElementById('save-model-btn');
 const saveDataBtn = document.getElementById('save-data-btn');
@@ -51,6 +52,7 @@ const avatarStyleSelect = document.getElementById('avatar-style-select');
 const avatarHeadPictureControls = document.getElementById('avatar-head-picture-controls');
 const avatarHeadPictureSelect = document.getElementById('avatar-head-picture-select');
 const avatarHeadPictureUploadBtn = document.getElementById('avatar-head-picture-upload-btn');
+const avatarHeadPictureDeleteBtn = document.getElementById('avatar-head-picture-delete-btn');
 const avatarHeadPictureStatus = document.getElementById('avatar-head-picture-status');
 const avatarHeadPictureInput = document.getElementById('avatar-head-picture-input');
 const faceImageProcessingOverlay = document.getElementById('face-image-processing-overlay');
@@ -333,6 +335,26 @@ async function readAvatarImageRecord(id) {
   });
 }
 
+async function deleteAvatarImageRecord(id) {
+  if (!id) return false;
+  const readyDb = await waitForDbReady().catch(() => null);
+  if (!readyDb || !readyDb.objectStoreNames.contains(AVATAR_IMAGES_STORE_NAME)) {
+    const records = readFallbackAvatarImages();
+    const nextRecords = records.filter(item => item.id !== id);
+    if (nextRecords.length === records.length) return false;
+    writeFallbackAvatarImages(nextRecords);
+    return true;
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = readyDb.transaction([AVATAR_IMAGES_STORE_NAME], 'readwrite');
+    const objectStore = transaction.objectStore(AVATAR_IMAGES_STORE_NAME);
+    const request = objectStore.delete(id);
+    request.onsuccess = () => resolve(true);
+    request.onerror = event => reject(event.target.error);
+  });
+}
+
 async function readSelectedAvatarImageForExport() {
   const selectedRecord = avatarImageCache.find(item => item.id === selectedHeadPictureName) ||
     await readAvatarImageRecord(selectedHeadPictureName);
@@ -542,6 +564,35 @@ function downloadPendingFaceImage() {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+async function deleteSelectedAvatarHeadImage() {
+  if (!avatarHeadPictureSelect) return;
+  const selectedId = avatarHeadPictureSelect.value || selectedHeadPictureName;
+  const picture = getHeadPictures().find(item => item.value === selectedId || item.id === selectedId || item.name === selectedId);
+
+  if (!picture || !picture.storedAvatarImage) {
+    setHeadPictureStatus('Only added avatar heads can be deleted.', true);
+    return;
+  }
+
+  if (!confirm(`Delete avatar head "${picture.name}"?`)) return;
+
+  try {
+    if (avatarHeadPictureDeleteBtn) avatarHeadPictureDeleteBtn.disabled = true;
+    await deleteAvatarImageRecord(selectedId);
+    selectedHeadPictureName = DEFAULT_HEAD_PICTURE.name;
+    rememberSelectedHeadPicture(selectedHeadPictureName);
+    await refreshAvatarImageCache();
+    setCustomHeadPicture(DEFAULT_HEAD_PICTURE.name);
+    scheduleLastSessionSave();
+    setHeadPictureStatus(`Deleted "${picture.name}".`, false);
+  } catch (error) {
+    console.error('Could not delete avatar head image:', error);
+    setHeadPictureStatus(`Delete failed: ${error.message || error}`, true);
+  } finally {
+    if (avatarHeadPictureDeleteBtn) avatarHeadPictureDeleteBtn.disabled = false;
+  }
 }
 
 async function saveUploadedHeadPicture(file) {
@@ -892,6 +943,7 @@ function updateHiddenLayers() {
 
 // Event listeners
   createModelBtn.addEventListener('click', createNewModel);
+  if (deleteModelBtn) deleteModelBtn.addEventListener('click', deleteSelectedModel);
   saveModelBtn.addEventListener('click', saveModel);  
   if (exportModelJsonBtn) exportModelJsonBtn.addEventListener('click', exportCurrentModelJson);
   if (importModelJsonBtn && importModelJsonInput) {
@@ -899,6 +951,7 @@ function updateHiddenLayers() {
     importModelJsonInput.addEventListener('change', importModelJsonFile);
   }
   if (loadDemoModelBtn) loadDemoModelBtn.addEventListener('click', loadDemoModelJson);
+  if (avatarHeadPictureDeleteBtn) avatarHeadPictureDeleteBtn.addEventListener('click', deleteSelectedAvatarHeadImage);
   if (avatarVisualToggle && avatarVisualPanel) {
     avatarVisualToggle.addEventListener('click', () => {
       setAvatarVisualPanelVisible(avatarVisualPanel.style.display === 'none');
@@ -2030,7 +2083,11 @@ mediaFileInput.addEventListener('change', function(event) {
 			song = song.replace(".ogg" , "");			
 			song = song.replace(".wav" , "");	
 		 			
-		    document.getElementById("songname").innerHTML= song;
+		    const songNameElement = document.getElementById("songname");
+		    if (songNameElement) {
+		      songNameElement.innerHTML = song;
+		      songNameElement.style.display = song ? 'block' : 'none';
+		    }
 			
             
             // Display and configure the audio player
@@ -3277,26 +3334,23 @@ function drawRobotBoy(poseLandmarks) {
     const displayY = anchorY - displayH;
     const imgRatio = CUSTOM_HEAD_IMAGE.naturalWidth / CUSTOM_HEAD_IMAGE.naturalHeight;
     const boxRatio = displayW / displayH;
-    let sourceX = 0;
-    let sourceY = 0;
-    let sourceW = CUSTOM_HEAD_IMAGE.naturalWidth;
-    let sourceH = CUSTOM_HEAD_IMAGE.naturalHeight;
+    let drawW = displayW;
+    let drawH = displayH;
+    let drawX = 0;
+    let drawY = 0;
 
     if (imgRatio > boxRatio) {
-      sourceW = sourceH * boxRatio;
-      sourceX = (CUSTOM_HEAD_IMAGE.naturalWidth - sourceW) / 2;
+      drawH = drawW / imgRatio;
+      drawY = (displayH - drawH) / 2;
     } else {
-      sourceH = sourceW / boxRatio;
-      sourceY = (CUSTOM_HEAD_IMAGE.naturalHeight - sourceH) / 2;
+      drawW = drawH * imgRatio;
+      drawX = (displayW - drawW) / 2;
     }
 
     canvasCtx.save();
     canvasCtx.translate(displayX, displayY);
     canvasCtx.transform(1, 0, (-1.1 * skew) / displayH, 1, 0, 0);
-    canvasCtx.beginPath();
-    canvasCtx.roundRect(0, 0, displayW, displayH, displayW * 0.12);
-    canvasCtx.clip();
-    canvasCtx.drawImage(CUSTOM_HEAD_IMAGE, sourceX, sourceY, sourceW, sourceH, 0, 0, displayW, displayH);
+    canvasCtx.drawImage(CUSTOM_HEAD_IMAGE, drawX, drawY, drawW, drawH);
     canvasCtx.restore();
 
     return true;
@@ -4264,6 +4318,16 @@ function rememberLastModelName(modelName) {
 	}
 }
 
+function clearLastModelName(modelName) {
+	try {
+		if (!modelName || localStorage.getItem(LAST_MODEL_STORAGE_KEY) === modelName) {
+			localStorage.removeItem(LAST_MODEL_STORAGE_KEY);
+		}
+	} catch (error) {
+		console.warn('Could not clear last model preference:', error);
+	}
+}
+
 function getMostRecentModelRecord(models) {
 	if (!Array.isArray(models) || !models.length) return null;
 
@@ -4574,6 +4638,24 @@ async function writeModelRecord(modelRecord) {
   });
 }
 
+async function deleteModelRecord(modelName) {
+  const readyDb = await waitForDbReady();
+
+  return new Promise((resolve, reject) => {
+    if (!readyDb || !modelName) {
+      resolve(false);
+      return;
+    }
+
+    const transaction = readyDb.transaction(['models'], 'readwrite');
+    const objectStore = transaction.objectStore('models');
+    const deleteRequest = objectStore.delete(modelName);
+
+    deleteRequest.onsuccess = () => resolve(true);
+    deleteRequest.onerror = event => reject(event.target.error);
+  });
+}
+
 async function readSettingsRecord(name) {
   const readyDb = await waitForDbReady();
 
@@ -4611,6 +4693,24 @@ async function writeSettingsRecord(name, sessionSnapshot) {
   });
 }
 
+async function deleteSettingsRecord(name) {
+  const readyDb = await waitForDbReady();
+
+  return new Promise((resolve, reject) => {
+    if (!readyDb || !name || !readyDb.objectStoreNames.contains(SETTINGS_STORE_NAME)) {
+      resolve(false);
+      return;
+    }
+
+    const transaction = readyDb.transaction([SETTINGS_STORE_NAME], 'readwrite');
+    const objectStore = transaction.objectStore(SETTINGS_STORE_NAME);
+    const deleteRequest = objectStore.delete(name);
+
+    deleteRequest.onsuccess = () => resolve(true);
+    deleteRequest.onerror = event => reject(event.target.error);
+  });
+}
+
 async function saveModelSettings(modelName) {
   if (!modelName) return null;
   return writeSettingsRecord(modelName, getSessionSettingsSnapshot(modelName));
@@ -4643,6 +4743,60 @@ function selectModelInUi(modelName) {
   modelSelect.value = modelName;
   currentModelName = modelName;
   rememberLastModelName(modelName);
+}
+
+function populateModelSelectFromRecords(models) {
+  const modelSelect = document.getElementById('model-select');
+  if (!modelSelect) return;
+
+  modelSelect.innerHTML = '';
+  (models || []).forEach(model => {
+    const option = document.createElement('option');
+    option.value = model.name;
+    option.textContent = getModelDisplayName(model.name);
+    modelSelect.appendChild(option);
+  });
+}
+
+async function deleteSelectedModel() {
+  const modelSelect = document.getElementById('model-select');
+  const selectedModelName = modelSelect && modelSelect.value ? modelSelect.value : currentModelName;
+
+  if (!selectedModelName) {
+    setModelJsonStatus('No model selected to delete.', true);
+    return;
+  }
+
+  if (!confirm(`Delete model "${getModelDisplayName(selectedModelName)}"?`)) return;
+
+  try {
+    if (deleteModelBtn) deleteModelBtn.disabled = true;
+    await deleteModelRecord(selectedModelName);
+    await deleteSettingsRecord(selectedModelName);
+    clearLastModelName(selectedModelName);
+
+    const models = await getAllModelRecords();
+    populateModelSelectFromRecords(models);
+
+    const nextModel = getMostRecentModelRecord(models) || models[0] || null;
+    if (nextModel && nextModel.name) {
+      if (modelSelect) modelSelect.value = nextModel.name;
+      await loadModel(nextModel.name);
+      await saveLastSession(nextModel.name);
+    } else {
+      currentModelName = null;
+      network = new brain.NeuralNetwork();
+      await deleteSettingsRecord(LAST_SESSION_SETTINGS_NAME);
+    }
+
+    setModelJsonStatus(`Deleted "${getModelDisplayName(selectedModelName)}".`, false);
+    updateShareUrlHash();
+  } catch (error) {
+    console.error('Could not delete model:', error);
+    setModelJsonStatus(`Delete failed: ${error.message || error}`, true);
+  } finally {
+    if (deleteModelBtn) deleteModelBtn.disabled = false;
+  }
 }
 
 function getInMemoryModelData() {

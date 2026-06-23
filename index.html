@@ -97,8 +97,7 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
         <button class="btt1" onclick="stopVideo()">Stop</button>
 		<!-- onclick="stopVideo()" -->
 		
-			<br>
-			<div id = "songname" class="" style="margin-top:12px;" >kiki</div>
+			<div id="songname" class="" style="display:none; margin-top:12px;"></div>
 		
 		
  <br> <input type="range" id="audio-volume-slider" min="-infinity" max="0" step="0.01" value="-2" 
@@ -159,7 +158,10 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
       <div id="avatar-head-picture-controls" style="display:none;">
         <label for="avatar-head-picture-select">Head Picture:</label>
         <select id="avatar-head-picture-select"></select>
-        <button id="avatar-head-picture-upload-btn" type="button">Add Avatar Head</button>
+        <div class="inline-action-row">
+          <button id="avatar-head-picture-upload-btn" type="button">add head</button>
+          <button id="avatar-head-picture-delete-btn" type="button">delete</button>
+        </div>
         <div id="avatar-head-picture-status" aria-live="polite"></div>
         <input id="avatar-head-picture-input" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" style="display:none;">
       </div>
@@ -211,7 +213,10 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
 	
     <label for="model-select">Model:</label>
     <select id="model-select"></select>
-    <button id="create-model-btn"> New Model</button>	
+    <div class="inline-action-row">
+      <button id="create-model-btn"> New Model</button>
+      <button id="delete-model-btn" type="button">delete</button>
+    </div>
 
 
  <hr>

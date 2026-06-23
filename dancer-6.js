@@ -2600,10 +2600,10 @@ function projectMagicPose(poseLandmarks) {
   const shoulderW = clamp(AVATAR_REFERENCE_SHOULDER_WIDTH + (rawShoulderW - AVATAR_REFERENCE_SHOULDER_WIDTH) * 0.42, 62, 150);
   [points[1], points[2]] = clampPairSpread(points[1], points[2], shoulderW * 0.72, shoulderW * 1.25);
   [points[7], points[8]] = clampPairSpread(points[7], points[8], shoulderW * 0.58, shoulderW * 1.08);
-  points[3] = clampPointToDistance(points[3], points[1], shoulderW * 1.28);
-  points[4] = clampPointToDistance(points[4], points[2], shoulderW * 1.28);
-  points[5] = clampPointToDistance(points[5], points[3], shoulderW * 1.34);
-  points[6] = clampPointToDistance(points[6], points[4], shoulderW * 1.34);
+  points[3] = clampPointToDistance(points[3], points[1], shoulderW * 1.12);
+  points[4] = clampPointToDistance(points[4], points[2], shoulderW * 1.12);
+  points[5] = clampPointToDistance(points[5], points[3], shoulderW * 1.16);
+  points[6] = clampPointToDistance(points[6], points[4], shoulderW * 1.16);
 
   return {
     points,
@@ -3425,6 +3425,22 @@ function drawRobotBoy(poseLandmarks) {
     x: (p23.x + p24.x) / 2,
     y: (p23.y + p24.y) / 2
   };
+  const shortenPointFromAnchor = (point, anchor, ratio) => ({
+    x: anchor.x + (point.x - anchor.x) * ratio,
+    y: anchor.y + (point.y - anchor.y) * ratio
+  });
+  const extendPointFromAnchor = (point, anchor, ratio) => ({
+    x: anchor.x + (point.x - anchor.x) * ratio,
+    y: anchor.y + (point.y - anchor.y) * ratio
+  });
+  const p13Render = shortenPointFromAnchor(p13, p11, 0.88);
+  const p14Render = shortenPointFromAnchor(p14, p12, 0.88);
+  const p15Render = shortenPointFromAnchor(p15, p11, 0.88);
+  const p16Render = shortenPointFromAnchor(p16, p12, 0.88);
+  const p25Render = extendPointFromAnchor(p25, p23, 1.12);
+  const p26Render = extendPointFromAnchor(p26, p24, 1.12);
+  const p27Render = extendPointFromAnchor(p27, p23, 1.12);
+  const p28Render = extendPointFromAnchor(p28, p24, 1.12);
 
   // Torso
   drawSegment(pSh, pHip, lm[LS], lm[LH], torsoW, TORSO, DARK, 0);
@@ -3436,20 +3452,20 @@ function drawRobotBoy(poseLandmarks) {
   drawSegment(p23, p24, lm[LH], lm[RH], torsoW * 0.6, TORSO, DARK, 0);
 
   // Legs
-  drawSegment(p23, p25, lm[LH], lm[LK], legW, LIMB, DARK, 0.12);
-  drawSegment(p24, p26, lm[RH], lm[RK], legW, LIMB, DARK, 0.12);
+  drawSegment(p23, p25Render, lm[LH], lm[LK], legW, LIMB, DARK, 0.12);
+  drawSegment(p24, p26Render, lm[RH], lm[RK], legW, LIMB, DARK, 0.12);
 
-  drawSegment(p25, p27, lm[LK], lm[LA], shinW, LIMB, DARK, 0.12);
-  drawSegment(p26, p28, lm[RK], lm[RA], shinW, LIMB, DARK, 0.12);
+  drawSegment(p25Render, p27Render, lm[LK], lm[LA], shinW, LIMB, DARK, 0.12);
+  drawSegment(p26Render, p28Render, lm[RK], lm[RA], shinW, LIMB, DARK, 0.12);
 
-  drawJoint(p25, jointR, JOINT);
-  drawJoint(p26, jointR, JOINT);
+  drawJoint(p25Render, jointR, JOINT);
+  drawJoint(p26Render, jointR, JOINT);
 
   // Feet
   canvasCtx.beginPath();
   canvasCtx.roundRect(
-    p27.x - footW * 0.25,
-    p27.y - footH * 0.5,
+    p27Render.x - footW * 0.25,
+    p27Render.y - footH * 0.5,
     footW,
     footH,
     footH * 0.3
@@ -3462,8 +3478,8 @@ function drawRobotBoy(poseLandmarks) {
 
   canvasCtx.beginPath();
   canvasCtx.roundRect(
-    p28.x - footW * 0.75,
-    p28.y - footH * 0.5,
+    p28Render.x - footW * 0.75,
+    p28Render.y - footH * 0.5,
     footW,
     footH,
     footH * 0.3
@@ -3475,20 +3491,20 @@ function drawRobotBoy(poseLandmarks) {
   canvasCtx.stroke();
 
   // Arms are drawn after hips and legs so hands stay visually in front.
-  drawSegment(p11, p13, lm[LS], lm[LE], armW, LIMB, DARK, 0.15);
-  drawSegment(p12, p14, lm[RS], lm[RE], armW, LIMB, DARK, 0.15);
+  drawSegment(p11, p13Render, lm[LS], lm[LE], armW, LIMB, DARK, 0.15);
+  drawSegment(p12, p14Render, lm[RS], lm[RE], armW, LIMB, DARK, 0.15);
 
-  drawSegment(p13, p15, lm[LE], lm[LW], foreW, LIMB, DARK, 0.15);
-  drawSegment(p14, p16, lm[RE], lm[RW], foreW, LIMB, DARK, 0.15);
+  drawSegment(p13Render, p15Render, lm[LE], lm[LW], foreW, LIMB, DARK, 0.15);
+  drawSegment(p14Render, p16Render, lm[RE], lm[RW], foreW, LIMB, DARK, 0.15);
 
-  drawJoint(p13, jointR, JOINT);
-  drawJoint(p14, jointR, JOINT);
+  drawJoint(p13Render, jointR, JOINT);
+  drawJoint(p14Render, jointR, JOINT);
 
   // Hands
   canvasCtx.beginPath();
   canvasCtx.roundRect(
-    p15.x - handW * 0.5,
-    p15.y - handH * 0.5,
+    p15Render.x - handW * 0.5,
+    p15Render.y - handH * 0.5,
     handW,
     handH,
     handH * 0.3
@@ -3501,8 +3517,8 @@ function drawRobotBoy(poseLandmarks) {
 
   canvasCtx.beginPath();
   canvasCtx.roundRect(
-    p16.x - handW * 0.5,
-    p16.y - handH * 0.5,
+    p16Render.x - handW * 0.5,
+    p16Render.y - handH * 0.5,
     handW,
     handH,
     handH * 0.3

@@ -57,6 +57,7 @@ body.dancing5-bg-gradient {
 
         #monerror {
             right: 20px;
+            font-size: 18px;
         }
 
         #moncount {
@@ -108,6 +109,18 @@ input[type="range"] {
     overflow-y: auto; /* Enable vertical scrolling */
     scrollbar-width: thin; /* For modern browsers, sets the scrollbar to be thin */
     scrollbar-color: green black; /* Green for the thumb, black for the track */
+}
+
+#model-manager label {
+    color: #b8ffb8;
+    font-size: 14.4px;
+    font-weight: 600;
+}
+
+#learn-time-value {
+    color: #ff4400;
+    font-size: 18px;
+    font-weight: 600;
 }
 
 /* For WebKit-based browsers (Chrome, Edge, Safari) */
@@ -382,6 +395,9 @@ hr
 #avatar-visual-panel label {
     margin-top: 5px;
     padding-bottom: 1px;
+    color: #b8ffb8;
+    font-size: 14.4px;
+    font-weight: 600;
 }
 
 #avatar-visual-panel input[type="range"] {

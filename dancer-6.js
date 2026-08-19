@@ -999,6 +999,7 @@ function onResults(results) {
         return;
     }
 	 
+    const sourceLandmarks = getPoseLandmarksForCurrentInput(results.poseLandmarks);
 	
     let okpos = [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];  
     let len = okpos.length;
@@ -1009,10 +1010,10 @@ function onResults(results) {
 	let pied =0;
 	
     for (let i = 0; i < len; i++) {
-        let landmark = results.poseLandmarks[okpos[i]];
+        let landmark = sourceLandmarks[okpos[i]];
 
         // Check if landmark.x or landmark.y is NaN
-        if (isNaN(landmark.x) || isNaN(landmark.y) || isNaN(landmark.z )) {
+        if (!landmark || isNaN(landmark.x) || isNaN(landmark.y) || isNaN(landmark.z )) {
             //console.log(`NaN detected at landmark ${okpos[i]}:`, landmark);
             flagNan = true;
             break; // Optionally break if you want to stop processing further landmarks
@@ -1988,6 +1989,26 @@ function mapCropLandmarksToVideo(landmarks, cropSourceBox) {
   return landmarks.map((landmark) => mapCropLandmarkToVideo(landmark, cropSourceBox));
 }
 
+function isValidPoseCropSourceBox(cropSourceBox) {
+  return !!(
+    cropSourceBox &&
+    Number.isFinite(cropSourceBox.x) &&
+    Number.isFinite(cropSourceBox.y) &&
+    Number.isFinite(cropSourceBox.width) &&
+    Number.isFinite(cropSourceBox.height) &&
+    cropSourceBox.width > 0 &&
+    cropSourceBox.height > 0 &&
+    videoPlayer.videoWidth > 0 &&
+    videoPlayer.videoHeight > 0
+  );
+}
+
+function getPoseLandmarksForCurrentInput(landmarks) {
+  if (!Array.isArray(landmarks)) return [];
+  if (!isValidPoseCropSourceBox(lastPoseCropSourceBox)) return landmarks;
+  return mapCropLandmarksToVideo(landmarks, lastPoseCropSourceBox);
+}
+
 window.mapCropLandmarkToVideo = mapCropLandmarkToVideo;
 window.mapCropLandmarksToVideo = mapCropLandmarksToVideo;
 
@@ -2450,6 +2471,7 @@ let zoom = 1700; // Zoom factor (controls how far the viewer is from the object)
 const AVATAR_DRAW_SCALE = 0.48;
 const AVATAR_CENTER_X_RATIO = 0.5;
 const AVATAR_CENTER_Y_RATIO = 0.47;
+const AVATAR_VERTICAL_OFFSET_RATIO = 0.04;
 const AVATAR_SIZE_VARIATION_FACTOR = 0.5;
 const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
 const AVATAR_MAX_WIDTH_RATIO = 0.34;
@@ -2475,6 +2497,10 @@ const POSE_OUTPUT_SCALE_CLAMP = {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function getAvatarVerticalOffset(canvasHeight) {
+  return -Math.max(0, canvasHeight || 0) * AVATAR_VERTICAL_OFFSET_RATIO;
 }
 
 const POSE_INDEX = {
@@ -2835,7 +2861,7 @@ function projectMagicPose(poseLandmarks) {
   const centerY = (poseLandmarks[1].y + poseLandmarks[2].y + poseLandmarks[7].y + poseLandmarks[8].y) / 4;
   const centerZ = (poseLandmarks[1].z + poseLandmarks[2].z + poseLandmarks[7].z + poseLandmarks[8].z) / 4;
   const canvasCenterX = W * AVATAR_CENTER_X_RATIO;
-  const canvasCenterY = H * AVATAR_CENTER_Y_RATIO;
+  const canvasCenterY = H * AVATAR_CENTER_Y_RATIO + getAvatarVerticalOffset(H);
   const perspective = zoom;
   const viewerDistance = 800;
   const screenFill = 0.9 + normalizePercentSlider(visualSettings.motionAmount, DEFAULT_VISUAL_SETTINGS.motionAmount) / 100 * 0.45;
@@ -3069,7 +3095,7 @@ function renderMagicAvatar(poseLandmarks) {
     magicState.idleSpin += 0.012 + features.energy * 0.03;
     const idleCenter = {
       x: W * 0.5,
-      y: H * 0.48
+      y: H * 0.48 + getAvatarVerticalOffset(H)
     };
     canvasCtx.save();
     canvasCtx.globalCompositeOperation = 'lighter';
@@ -3526,7 +3552,7 @@ function drawRobotBoy(poseLandmarks) {
   const W = stage.width;
   const H = stage.height;
   const stageCenterX = stage.x + W / 2;
-  const stageCenterY = stage.y + H / 2;
+  const stageCenterY = stage.y + H / 2 + getAvatarVerticalOffset(H);
 
   function project3D(x, y, z) {
     z = z / 2;
@@ -4131,7 +4157,7 @@ function drawBoy(dtx) {
         const centerX = (poseLandmarks[1].x + poseLandmarks[2].x + poseLandmarks[7].x + poseLandmarks[8].x) / 4;
         const centerY = (poseLandmarks[1].y + poseLandmarks[2].y + poseLandmarks[7].y + poseLandmarks[8].y) / 4;
         const canvasCenterX = stage.x + W / 2;
-        const canvasCenterY = stage.y + H / 2;
+        const canvasCenterY = stage.y + H / 2 + getAvatarVerticalOffset(H);
 
         connections.forEach(([startIdx, endIdx]) => {
             const start = poseLandmarks[startIdx];

@@ -2199,6 +2199,7 @@ mediaFileInput.addEventListener('change', function(event) {
             console.log("Loading video file:", file.name);
             setHumanSelectorControlsVisible(true);
             resetHumanSelectionState();
+            poseCaptureNormalizer.reset();
             
             // Display and configure the video player
             videoPlayer.src = fileURL;
@@ -2595,22 +2596,32 @@ const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
 const AVATAR_MAX_WIDTH_RATIO = 0.34;
 const AVATAR_MAX_HEIGHT_RATIO = 0.44;
 const POSE_LANDMARK_COUNT = 13;
+const CANONICAL_BODY_CENTER = { x: 0.5, y: 0.5, z: 0 };
+const CANONICAL_BODY_HEIGHT = 0.82;
+const CANONICAL_SHOULDER_WIDTH = 0.24;
+const CANONICAL_HIP_WIDTH = 0.18;
+const CANONICAL_TORSO_HEIGHT = 0.26;
 const POSE_CAPTURE_CALIBRATION_FRAMES = 8;
 const POSE_MIN_VISIBILITY = 0.55;
 const POSE_CAPTURE_SCALE_CLAMP = {
-  minX: 0.76,
-  maxX: 1.32,
-  minY: 0.78,
-  maxY: 1.28,
-  blend: 0.82
+  minX: 0.62,
+  maxX: 1.72,
+  minY: 0.62,
+  maxY: 1.72,
+  blend: 0.92
 };
 const POSE_OUTPUT_SCALE_CLAMP = {
-  minX: 0.72,
-  maxX: 1.38,
-  minY: 0.74,
-  maxY: 1.34,
+  minX: 0.58,
+  maxX: 1.86,
+  minY: 0.58,
+  maxY: 1.86,
   maxFrameScaleStep: 0.045,
   smooth: 0.22
+};
+const POSE_CANONICAL_SAMPLE_RATIO_LIMIT = {
+  min: 0.52,
+  max: 1.92,
+  maxCenterJump: 0.45
 };
 
 function clamp(value, min, max) {
@@ -2663,27 +2674,23 @@ function getPoseMetricPointVisibility(point) {
   return point && typeof point.visibility === 'number' ? point.visibility : 1;
 }
 
+function isUsablePoseMetricPoint(point) {
+  return point &&
+    Number.isFinite(point.x) &&
+    Number.isFinite(point.y) &&
+    Number.isFinite(point.z) &&
+    getPoseMetricPointVisibility(point) >= POSE_MIN_VISIBILITY;
+}
+
 function hasStablePoseMetricVisibility(poseLandmarks) {
   const required = [
-    POSE_INDEX.NOSE,
     POSE_INDEX.LS,
     POSE_INDEX.RS,
     POSE_INDEX.LH,
-    POSE_INDEX.RH,
-    POSE_INDEX.LK,
-    POSE_INDEX.RK,
-    POSE_INDEX.LA,
-    POSE_INDEX.RA
+    POSE_INDEX.RH
   ];
 
-  return required.every(index => {
-    const point = poseLandmarks[index];
-    return point &&
-      Number.isFinite(point.x) &&
-      Number.isFinite(point.y) &&
-      Number.isFinite(point.z) &&
-      getPoseMetricPointVisibility(point) >= POSE_MIN_VISIBILITY;
-  });
+  return required.every(index => isUsablePoseMetricPoint(poseLandmarks[index]));
 }
 
 function getPoseScaleMetrics(poseLandmarks) {
@@ -2697,26 +2704,54 @@ function getPoseScaleMetrics(poseLandmarks) {
   const rightHip = poseLandmarks[POSE_INDEX.RH];
   const shoulderCenter = averagePoint(leftShoulder, rightShoulder);
   const hipCenter = averagePoint(leftHip, rightHip);
+  const torsoCenter = {
+    x: (shoulderCenter.x + hipCenter.x) / 2,
+    y: (shoulderCenter.y + hipCenter.y) / 2,
+    z: (shoulderCenter.z + hipCenter.z) / 2
+  };
   const shoulderWidth = distance3D(leftShoulder, rightShoulder);
   const hipWidth = distance3D(leftHip, rightHip);
   const torsoHeight = distance3D(shoulderCenter, hipCenter);
-  const neckHead = distance3D(poseLandmarks[POSE_INDEX.NOSE], shoulderCenter);
-  const leftLeg = distance3D(leftHip, poseLandmarks[POSE_INDEX.LK]) + distance3D(poseLandmarks[POSE_INDEX.LK], poseLandmarks[POSE_INDEX.LA]);
-  const rightLeg = distance3D(rightHip, poseLandmarks[POSE_INDEX.RK]) + distance3D(poseLandmarks[POSE_INDEX.RK], poseLandmarks[POSE_INDEX.RA]);
-  const bodyHeight = neckHead + torsoHeight + ((leftLeg + rightLeg) / 2);
-  const bodyWidth = Math.max(shoulderWidth, hipWidth * 1.08);
+  const nose = poseLandmarks[POSE_INDEX.NOSE];
+  const leftLeg = isUsablePoseMetricPoint(poseLandmarks[POSE_INDEX.LK]) && isUsablePoseMetricPoint(poseLandmarks[POSE_INDEX.LA])
+    ? distance3D(leftHip, poseLandmarks[POSE_INDEX.LK]) + distance3D(poseLandmarks[POSE_INDEX.LK], poseLandmarks[POSE_INDEX.LA])
+    : null;
+  const rightLeg = isUsablePoseMetricPoint(poseLandmarks[POSE_INDEX.RK]) && isUsablePoseMetricPoint(poseLandmarks[POSE_INDEX.RA])
+    ? distance3D(rightHip, poseLandmarks[POSE_INDEX.RK]) + distance3D(poseLandmarks[POSE_INDEX.RK], poseLandmarks[POSE_INDEX.RA])
+    : null;
+  const legSamples = [leftLeg, rightLeg].filter(Number.isFinite);
+  const legHeight = legSamples.length
+    ? clamp(legSamples.reduce((sum, value) => sum + value, 0) / legSamples.length, torsoHeight * 1.25, torsoHeight * 3.7)
+    : torsoHeight * 2.35;
+  const headHeight = isUsablePoseMetricPoint(nose)
+    ? clamp(distance3D(nose, shoulderCenter), torsoHeight * 0.28, torsoHeight * 1.35)
+    : torsoHeight * 0.65;
+  const bodyHeight = headHeight + torsoHeight + legHeight;
+  const bodyWidth = (shoulderWidth * 0.68) + (hipWidth * 1.08 * 0.32);
 
-  if (bodyHeight < 0.12 || bodyHeight > 3 || bodyWidth < 0.04 || bodyWidth > 2) return null;
+  if (
+    shoulderWidth < 0.035 ||
+    hipWidth < 0.025 ||
+    torsoHeight < 0.04 ||
+    bodyHeight < 0.16 ||
+    shoulderWidth > 1.5 ||
+    hipWidth > 1.5 ||
+    torsoHeight > 1.8 ||
+    bodyHeight > 4
+  ) {
+    return null;
+  }
 
   return {
-    center: {
-      x: (shoulderCenter.x + hipCenter.x) / 2,
-      y: (shoulderCenter.y + hipCenter.y) / 2,
-      z: (shoulderCenter.z + hipCenter.z) / 2
-    },
+    center: torsoCenter,
+    torsoCenter,
+    shoulderCenter,
+    hipCenter,
     bodyHeight,
     bodyWidth,
-    shoulderWidth
+    shoulderWidth,
+    hipWidth,
+    torsoHeight
   };
 }
 
@@ -2727,53 +2762,172 @@ function medianNumber(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+function trimmedAverageNumber(values) {
+  const sorted = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const trimCount = sorted.length >= 6 ? 1 : 0;
+  const trimmed = sorted.slice(trimCount, sorted.length - trimCount);
+  return trimmed.reduce((sum, value) => sum + value, 0) / trimmed.length;
+}
+
+function getCanonicalPoseMetrics() {
+  return {
+    center: Object.assign({}, CANONICAL_BODY_CENTER),
+    bodyHeight: CANONICAL_BODY_HEIGHT,
+    bodyWidth: (CANONICAL_SHOULDER_WIDTH * 0.68) + (CANONICAL_HIP_WIDTH * 1.08 * 0.32),
+    shoulderWidth: CANONICAL_SHOULDER_WIDTH,
+    hipWidth: CANONICAL_HIP_WIDTH,
+    torsoHeight: CANONICAL_TORSO_HEIGHT
+  };
+}
+
+function summarizePoseMetricSamples(samples) {
+  if (!samples.length) return null;
+  return {
+    bodyHeight: trimmedAverageNumber(samples.map(item => item.bodyHeight)),
+    bodyWidth: trimmedAverageNumber(samples.map(item => item.bodyWidth)),
+    shoulderWidth: trimmedAverageNumber(samples.map(item => item.shoulderWidth)),
+    hipWidth: trimmedAverageNumber(samples.map(item => item.hipWidth)),
+    torsoHeight: trimmedAverageNumber(samples.map(item => item.torsoHeight)),
+    calibratedAt: new Date().toISOString(),
+    frames: samples.length
+  };
+}
+
+function isSuspiciousPoseMetricSample(metrics, samples) {
+  if (!metrics || samples.length < 3) return false;
+
+  const reference = {
+    bodyHeight: medianNumber(samples.map(item => item.bodyHeight)),
+    shoulderWidth: medianNumber(samples.map(item => item.shoulderWidth)),
+    hipWidth: medianNumber(samples.map(item => item.hipWidth)),
+    torsoHeight: medianNumber(samples.map(item => item.torsoHeight)),
+    center: samples[samples.length - 1].center
+  };
+  const ratios = [
+    metrics.bodyHeight / reference.bodyHeight,
+    metrics.shoulderWidth / reference.shoulderWidth,
+    metrics.hipWidth / reference.hipWidth,
+    metrics.torsoHeight / reference.torsoHeight
+  ].filter(Number.isFinite);
+  const badRatio = ratios.some(value => value < POSE_CANONICAL_SAMPLE_RATIO_LIMIT.min || value > POSE_CANONICAL_SAMPLE_RATIO_LIMIT.max);
+  const centerJump = reference.center
+    ? Math.hypot(metrics.center.x - reference.center.x, metrics.center.y - reference.center.y)
+    : 0;
+
+  return badRatio || centerJump > POSE_CANONICAL_SAMPLE_RATIO_LIMIT.maxCenterJump;
+}
+
+function isSuspiciousPoseMetricAgainstReference(metrics, reference) {
+  if (!metrics || !reference) return false;
+  const ratios = [
+    metrics.bodyHeight / reference.bodyHeight,
+    metrics.shoulderWidth / reference.shoulderWidth,
+    metrics.hipWidth / reference.hipWidth,
+    metrics.torsoHeight / reference.torsoHeight
+  ].filter(Number.isFinite);
+
+  return ratios.some(value => value < POSE_CANONICAL_SAMPLE_RATIO_LIMIT.min || value > POSE_CANONICAL_SAMPLE_RATIO_LIMIT.max);
+}
+
+function getCanonicalRetargetScales(metrics, scaleClamp) {
+  const target = getCanonicalPoseMetrics();
+  const rawShoulderScale = target.shoulderWidth / metrics.shoulderWidth;
+  const rawHipScale = target.hipWidth / metrics.hipWidth;
+  const rawTorsoScale = target.torsoHeight / metrics.torsoHeight;
+  const rawHeightScale = target.bodyHeight / metrics.bodyHeight;
+  const rawScaleX = ((rawShoulderScale * 0.7) + (rawHipScale * 0.3));
+  const rawScaleY = ((rawTorsoScale * 0.76) + (rawHeightScale * 0.24));
+  const scaleX = 1 + (clamp(rawScaleX, scaleClamp.minX, scaleClamp.maxX) - 1) * scaleClamp.blend;
+  const scaleY = 1 + (clamp(rawScaleY, scaleClamp.minY, scaleClamp.maxY) - 1) * scaleClamp.blend;
+
+  return {
+    x: scaleX,
+    y: scaleY,
+    z: (scaleX + scaleY) / 2,
+    rawX: rawScaleX,
+    rawY: rawScaleY
+  };
+}
+
+function retargetPoseToCanonical(pose, metrics, scales) {
+  const targetCenter = CANONICAL_BODY_CENTER;
+  return pose.map(point => point ? {
+    x: targetCenter.x + (point.x - metrics.center.x) * scales.x,
+    y: targetCenter.y + (point.y - metrics.center.y) * scales.y,
+    z: targetCenter.z + ((point.z || 0) - metrics.center.z) * scales.z,
+    visibility: point.visibility
+  } : point);
+}
+
 function createPoseNormalizer(options = {}) {
   const calibrationFrames = options.calibrationFrames || POSE_CAPTURE_CALIBRATION_FRAMES;
   const scaleClamp = options.scaleClamp || POSE_CAPTURE_SCALE_CLAMP;
   const samples = [];
   let referenceMetrics = null;
+  let lastMetrics = null;
+  let lastScales = null;
+  let lastNormalizedPose = null;
+  let skippedSuspiciousFrames = 0;
 
   function addCalibrationSample(metrics) {
     if (!metrics || referenceMetrics || samples.length >= calibrationFrames) return;
+    if (isSuspiciousPoseMetricSample(metrics, samples)) {
+      skippedSuspiciousFrames++;
+      return;
+    }
     samples.push(metrics);
     if (samples.length < calibrationFrames) return;
 
-    referenceMetrics = {
-      bodyHeight: medianNumber(samples.map(item => item.bodyHeight)),
-      bodyWidth: medianNumber(samples.map(item => item.bodyWidth)),
-      shoulderWidth: medianNumber(samples.map(item => item.shoulderWidth)),
-      calibratedAt: new Date().toISOString(),
-      frames: samples.length
-    };
+    referenceMetrics = summarizePoseMetricSamples(samples);
   }
 
   function normalize(poseLandmarks) {
     const pose = clonePoseLandmarks(poseLandmarks);
     const metrics = getPoseScaleMetrics(pose);
-    if (!metrics) return pose;
+    if (!metrics) {
+      skippedSuspiciousFrames++;
+      return lastNormalizedPose ? clonePoseLandmarks(lastNormalizedPose) : pose;
+    }
 
     addCalibrationSample(metrics);
-    if (!referenceMetrics || !referenceMetrics.bodyHeight || !referenceMetrics.bodyWidth) return pose;
+    if (referenceMetrics && isSuspiciousPoseMetricAgainstReference(metrics, referenceMetrics)) {
+      skippedSuspiciousFrames++;
+      return lastNormalizedPose ? clonePoseLandmarks(lastNormalizedPose) : pose;
+    }
+    const scales = getCanonicalRetargetScales(metrics, scaleClamp);
+    lastMetrics = Object.assign({}, metrics);
+    lastScales = Object.assign({}, scales);
+    lastNormalizedPose = retargetPoseToCanonical(pose, metrics, scales);
 
-    const rawScaleX = referenceMetrics.bodyWidth / metrics.bodyWidth;
-    const rawScaleY = referenceMetrics.bodyHeight / metrics.bodyHeight;
-    const scaleX = 1 + (clamp(rawScaleX, scaleClamp.minX, scaleClamp.maxX) - 1) * scaleClamp.blend;
-    const scaleY = 1 + (clamp(rawScaleY, scaleClamp.minY, scaleClamp.maxY) - 1) * scaleClamp.blend;
-
-    return pose.map(point => point ? {
-      x: metrics.center.x + (point.x - metrics.center.x) * scaleX,
-      y: metrics.center.y + (point.y - metrics.center.y) * scaleY,
-      z: metrics.center.z + (point.z - metrics.center.z) * ((scaleX + scaleY) / 2),
-      visibility: point.visibility
-    } : point);
+    return clonePoseLandmarks(lastNormalizedPose);
   }
 
   return {
     normalize,
-    getCalibration: () => referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+    getCalibration: () => ({
+      target: getCanonicalPoseMetrics(),
+      sourceReference: referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+      samples: samples.length,
+      skippedSuspiciousFrames
+    }),
+    getLastMetrics: () => lastMetrics ? Object.assign({}, lastMetrics) : null,
+    getLastScales: () => lastScales ? Object.assign({}, lastScales) : null,
+    getState: () => ({
+      calibration: referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+      lastMetrics: lastMetrics ? Object.assign({}, lastMetrics) : null,
+      lastScales: lastScales ? Object.assign({}, lastScales) : null,
+      samples: samples.length,
+      skippedSuspiciousFrames,
+      target: getCanonicalPoseMetrics()
+    }),
     reset: () => {
       samples.length = 0;
       referenceMetrics = null;
+      lastMetrics = null;
+      lastScales = null;
+      lastNormalizedPose = null;
+      skippedSuspiciousFrames = 0;
     }
   };
 }
@@ -2785,52 +2939,83 @@ function createAvatarBoundsStabilizer(options = {}) {
   let referenceMetrics = null;
   let lastScaleX = 1;
   let lastScaleY = 1;
+  let lastMetrics = null;
+  let lastScales = null;
+  let lastStabilizedPose = null;
+  let skippedSuspiciousFrames = 0;
 
   function rememberReference(metrics) {
     if (!metrics || referenceMetrics || samples.length >= calibrationFrames) return;
+    if (isSuspiciousPoseMetricSample(metrics, samples)) {
+      skippedSuspiciousFrames++;
+      return;
+    }
     samples.push(metrics);
     if (samples.length < calibrationFrames) return;
-    referenceMetrics = {
-      bodyHeight: medianNumber(samples.map(item => item.bodyHeight)),
-      bodyWidth: medianNumber(samples.map(item => item.bodyWidth)),
-      shoulderWidth: medianNumber(samples.map(item => item.shoulderWidth)),
-      calibratedAt: new Date().toISOString(),
-      frames: samples.length
-    };
+    referenceMetrics = summarizePoseMetricSamples(samples);
   }
 
   function stabilize(poseLandmarks) {
     const pose = clonePoseLandmarks(poseLandmarks);
     const metrics = getPoseScaleMetrics(pose);
-    if (!metrics) return pose;
+    if (!metrics) {
+      skippedSuspiciousFrames++;
+      return lastStabilizedPose ? clonePoseLandmarks(lastStabilizedPose) : pose;
+    }
 
     rememberReference(metrics);
-    if (!referenceMetrics || !referenceMetrics.bodyHeight || !referenceMetrics.bodyWidth) return pose;
-
-    const targetScaleX = clamp(referenceMetrics.bodyWidth / metrics.bodyWidth, scaleClamp.minX, scaleClamp.maxX);
-    const targetScaleY = clamp(referenceMetrics.bodyHeight / metrics.bodyHeight, scaleClamp.minY, scaleClamp.maxY);
+    if (referenceMetrics && isSuspiciousPoseMetricAgainstReference(metrics, referenceMetrics)) {
+      skippedSuspiciousFrames++;
+      return lastStabilizedPose ? clonePoseLandmarks(lastStabilizedPose) : pose;
+    }
+    const canonicalScales = getCanonicalRetargetScales(metrics, Object.assign({}, scaleClamp, { blend: 1 }));
+    const targetScaleX = clamp(canonicalScales.x, scaleClamp.minX, scaleClamp.maxX);
+    const targetScaleY = clamp(canonicalScales.y, scaleClamp.minY, scaleClamp.maxY);
     const limitedScaleX = clamp(targetScaleX, lastScaleX - scaleClamp.maxFrameScaleStep, lastScaleX + scaleClamp.maxFrameScaleStep);
     const limitedScaleY = clamp(targetScaleY, lastScaleY - scaleClamp.maxFrameScaleStep, lastScaleY + scaleClamp.maxFrameScaleStep);
 
     lastScaleX = lastScaleX + (limitedScaleX - lastScaleX) * scaleClamp.smooth;
     lastScaleY = lastScaleY + (limitedScaleY - lastScaleY) * scaleClamp.smooth;
+    lastMetrics = Object.assign({}, metrics);
+    lastScales = {
+      x: lastScaleX,
+      y: lastScaleY,
+      z: (lastScaleX + lastScaleY) / 2,
+      rawX: canonicalScales.rawX,
+      rawY: canonicalScales.rawY
+    };
+    lastStabilizedPose = retargetPoseToCanonical(pose, metrics, lastScales);
 
-    return pose.map(point => point ? {
-      x: metrics.center.x + (point.x - metrics.center.x) * lastScaleX,
-      y: metrics.center.y + (point.y - metrics.center.y) * lastScaleY,
-      z: metrics.center.z + (point.z - metrics.center.z) * ((lastScaleX + lastScaleY) / 2),
-      visibility: point.visibility
-    } : point);
+    return clonePoseLandmarks(lastStabilizedPose);
   }
 
   return {
     stabilize,
-    getCalibration: () => referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+    getCalibration: () => ({
+      target: getCanonicalPoseMetrics(),
+      sourceReference: referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+      samples: samples.length,
+      skippedSuspiciousFrames
+    }),
+    getLastMetrics: () => lastMetrics ? Object.assign({}, lastMetrics) : null,
+    getLastScales: () => lastScales ? Object.assign({}, lastScales) : null,
+    getState: () => ({
+      calibration: referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+      lastMetrics: lastMetrics ? Object.assign({}, lastMetrics) : null,
+      lastScales: lastScales ? Object.assign({}, lastScales) : null,
+      samples: samples.length,
+      skippedSuspiciousFrames,
+      target: getCanonicalPoseMetrics()
+    }),
     reset: () => {
       samples.length = 0;
       referenceMetrics = null;
       lastScaleX = 1;
       lastScaleY = 1;
+      lastMetrics = null;
+      lastScales = null;
+      lastStabilizedPose = null;
+      skippedSuspiciousFrames = 0;
     }
   };
 }
@@ -2841,6 +3026,14 @@ const avatarOutputStabilizer = createAvatarBoundsStabilizer();
 window.Dancing5PoseCalibration = {
   getCapture: () => poseCaptureNormalizer.getCalibration(),
   getOutput: () => avatarOutputStabilizer.getCalibration(),
+  getLastMetrics: () => ({
+    capture: poseCaptureNormalizer.getLastMetrics(),
+    output: avatarOutputStabilizer.getLastMetrics()
+  }),
+  getState: () => ({
+    capture: poseCaptureNormalizer.getState(),
+    output: avatarOutputStabilizer.getState()
+  }),
   reset: () => {
     poseCaptureNormalizer.reset();
     avatarOutputStabilizer.reset();

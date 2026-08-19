@@ -1153,14 +1153,26 @@ function onResults(results) {
     }
 	
 	
-	if(tete <= 0 || pied >= 1 || pied <= 0 || tete >= 1){  allPos = [];  return; }
-
     if (flagNan) {
-        console.log('One or more landmarks contain NaN values.');
+        const quality = poseQualityGate.reject('invalid landmark values');
+        allPos = quality.previewPose || [];
         return; // Exit the function if NaN is detected
     }
 
+	if(tete <= 0 || pied >= 1 || pied <= 0 || tete >= 1){
+        const quality = poseQualityGate.reject('body outside video bounds');
+        allPos = quality.previewPose || [];
+        return;
+    }
+
+    const quality = poseQualityGate.assess(allPos);
+    if (!quality.ok) {
+        allPos = quality.previewPose || [];
+        return;
+    }
+
     allPos = poseCaptureNormalizer.normalize(allPos);
+    poseQualityGate.acceptPreviewPose(allPos);
 	
     thisrun++;
 }
@@ -2200,6 +2212,7 @@ mediaFileInput.addEventListener('change', function(event) {
             setHumanSelectorControlsVisible(true);
             resetHumanSelectionState();
             poseCaptureNormalizer.reset();
+            poseQualityGate.reset();
             
             // Display and configure the video player
             videoPlayer.src = fileURL;
@@ -2623,6 +2636,12 @@ const POSE_CANONICAL_SAMPLE_RATIO_LIMIT = {
   max: 1.92,
   maxCenterJump: 0.45
 };
+const POSE_QUALITY_MIN_CORE_VISIBILITY = 0.5;
+const POSE_QUALITY_CENTER_JUMP_MAX = 0.26;
+const POSE_QUALITY_BODY_HEIGHT_RATIO_LIMIT = { min: 0.58, max: 1.72 };
+const POSE_QUALITY_CORE_WIDTH_RATIO_LIMIT = { min: 0.56, max: 1.78 };
+const POSE_QUALITY_TORSO_HEIGHT_RATIO_LIMIT = { min: 0.56, max: 1.78 };
+const POSE_QUALITY_STATUS_THROTTLE_MS = 1600;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -2778,6 +2797,191 @@ function getCanonicalPoseMetrics() {
     shoulderWidth: CANONICAL_SHOULDER_WIDTH,
     hipWidth: CANONICAL_HIP_WIDTH,
     torsoHeight: CANONICAL_TORSO_HEIGHT
+  };
+}
+
+function getCorePoseVisibility(poseLandmarks) {
+  const coreIndexes = [POSE_INDEX.LS, POSE_INDEX.RS, POSE_INDEX.LH, POSE_INDEX.RH];
+  const values = coreIndexes.map(index => getPoseMetricPointVisibility(poseLandmarks && poseLandmarks[index]));
+  return {
+    min: Math.min(...values),
+    average: values.reduce((sum, value) => sum + value, 0) / values.length
+  };
+}
+
+function getPoseQualityMetrics(poseLandmarks) {
+  const metrics = getPoseScaleMetrics(poseLandmarks);
+  if (!metrics) return null;
+  return {
+    center: metrics.center,
+    bodyHeight: metrics.bodyHeight,
+    shoulderWidth: metrics.shoulderWidth,
+    hipWidth: metrics.hipWidth,
+    torsoHeight: metrics.torsoHeight,
+    coreVisibility: getCorePoseVisibility(poseLandmarks)
+  };
+}
+
+function getPoseMetricRatio(value, referenceValue) {
+  if (!Number.isFinite(value) || !Number.isFinite(referenceValue) || referenceValue <= 0) return null;
+  return value / referenceValue;
+}
+
+function isRatioOutside(ratio, limit) {
+  return Number.isFinite(ratio) && (ratio < limit.min || ratio > limit.max);
+}
+
+function assessPoseQuality(poseLandmarks, previousMetrics = null) {
+  if (!Array.isArray(poseLandmarks) || poseLandmarks.length < POSE_LANDMARK_COUNT) {
+    return { ok: false, reason: 'missing 13-landmark pose', metrics: null };
+  }
+
+  for (let i = 0; i < POSE_LANDMARK_COUNT; i++) {
+    const point = poseLandmarks[i];
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
+      return { ok: false, reason: `invalid landmark ${i}`, metrics: null };
+    }
+  }
+
+  const coreVisibility = getCorePoseVisibility(poseLandmarks);
+  if (coreVisibility.min < POSE_QUALITY_MIN_CORE_VISIBILITY) {
+    return {
+      ok: false,
+      reason: 'low shoulder/hip visibility',
+      metrics: { coreVisibility }
+    };
+  }
+
+  const metrics = getPoseQualityMetrics(poseLandmarks);
+  if (!metrics) {
+    return { ok: false, reason: 'invalid core body metrics', metrics: { coreVisibility } };
+  }
+
+  if (previousMetrics) {
+    const centerJump = Math.hypot(
+      metrics.center.x - previousMetrics.center.x,
+      metrics.center.y - previousMetrics.center.y
+    );
+    if (centerJump > POSE_QUALITY_CENTER_JUMP_MAX) {
+      return {
+        ok: false,
+        reason: 'sudden body center jump',
+        metrics: Object.assign({}, metrics, { centerJump })
+      };
+    }
+
+    const bodyHeightRatio = getPoseMetricRatio(metrics.bodyHeight, previousMetrics.bodyHeight);
+    if (isRatioOutside(bodyHeightRatio, POSE_QUALITY_BODY_HEIGHT_RATIO_LIMIT)) {
+      return {
+        ok: false,
+        reason: 'sudden body height jump',
+        metrics: Object.assign({}, metrics, { bodyHeightRatio })
+      };
+    }
+
+    const shoulderWidthRatio = getPoseMetricRatio(metrics.shoulderWidth, previousMetrics.shoulderWidth);
+    const hipWidthRatio = getPoseMetricRatio(metrics.hipWidth, previousMetrics.hipWidth);
+    if (
+      isRatioOutside(shoulderWidthRatio, POSE_QUALITY_CORE_WIDTH_RATIO_LIMIT) ||
+      isRatioOutside(hipWidthRatio, POSE_QUALITY_CORE_WIDTH_RATIO_LIMIT)
+    ) {
+      return {
+        ok: false,
+        reason: 'sudden shoulder/hip width jump',
+        metrics: Object.assign({}, metrics, { shoulderWidthRatio, hipWidthRatio })
+      };
+    }
+
+    const torsoHeightRatio = getPoseMetricRatio(metrics.torsoHeight, previousMetrics.torsoHeight);
+    if (isRatioOutside(torsoHeightRatio, POSE_QUALITY_TORSO_HEIGHT_RATIO_LIMIT)) {
+      return {
+        ok: false,
+        reason: 'sudden torso height jump',
+        metrics: Object.assign({}, metrics, { torsoHeightRatio })
+      };
+    }
+  }
+
+  return { ok: true, reason: 'ok', metrics };
+}
+
+function createPoseQualityGate() {
+  let acceptedFrameCount = 0;
+  let skippedBadFrameCount = 0;
+  let lastSkipReason = null;
+  let lastQualityMetrics = null;
+  let previousAcceptedMetrics = null;
+  let lastAcceptedPose = null;
+  let lastStatusAt = 0;
+
+  function showSkipStatus(reason) {
+    const now = performance.now();
+    if ((now - lastStatusAt) < POSE_QUALITY_STATUS_THROTTLE_MS) return;
+    lastStatusAt = now;
+    if (typeof setDatasetJsonStatus === 'function') {
+      setDatasetJsonStatus(`Skipped unstable pose frame: ${reason}`, true);
+    } else {
+      console.warn(`Skipped unstable pose frame: ${reason}`);
+    }
+  }
+
+  function assess(poseLandmarks) {
+    const result = assessPoseQuality(poseLandmarks, previousAcceptedMetrics);
+    lastQualityMetrics = result.metrics;
+
+    if (!result.ok) {
+      return reject(result.reason, result.metrics);
+    }
+
+    acceptedFrameCount++;
+    lastSkipReason = null;
+    previousAcceptedMetrics = result.metrics;
+    return result;
+  }
+
+  function reject(reason, metrics = null) {
+    skippedBadFrameCount++;
+    lastSkipReason = reason;
+    lastQualityMetrics = metrics || lastQualityMetrics;
+    showSkipStatus(reason);
+    return {
+      ok: false,
+      reason,
+      metrics,
+      previewPose: lastAcceptedPose ? clonePoseLandmarks(lastAcceptedPose) : null
+    };
+  }
+
+  function acceptPreviewPose(poseLandmarks) {
+    lastAcceptedPose = clonePoseLandmarks(poseLandmarks);
+  }
+
+  function getState() {
+    return {
+      acceptedFrameCount,
+      skippedBadFrameCount,
+      lastSkipReason,
+      lastQualityMetrics: lastQualityMetrics ? Object.assign({}, lastQualityMetrics) : null,
+      previousAcceptedMetrics: previousAcceptedMetrics ? Object.assign({}, previousAcceptedMetrics) : null
+    };
+  }
+
+  function reset() {
+    acceptedFrameCount = 0;
+    skippedBadFrameCount = 0;
+    lastSkipReason = null;
+    lastQualityMetrics = null;
+    previousAcceptedMetrics = null;
+    lastAcceptedPose = null;
+    lastStatusAt = 0;
+  }
+
+  return {
+    assess,
+    reject,
+    acceptPreviewPose,
+    getState,
+    reset
   };
 }
 
@@ -3022,20 +3226,25 @@ function createAvatarBoundsStabilizer(options = {}) {
 
 // Capture normalization improves future datasets; output stabilization keeps older models from stretching.
 const poseCaptureNormalizer = createPoseNormalizer();
+const poseQualityGate = createPoseQualityGate();
 const avatarOutputStabilizer = createAvatarBoundsStabilizer();
 window.Dancing5PoseCalibration = {
   getCapture: () => poseCaptureNormalizer.getCalibration(),
   getOutput: () => avatarOutputStabilizer.getCalibration(),
+  getQuality: () => poseQualityGate.getState(),
   getLastMetrics: () => ({
     capture: poseCaptureNormalizer.getLastMetrics(),
-    output: avatarOutputStabilizer.getLastMetrics()
+    output: avatarOutputStabilizer.getLastMetrics(),
+    quality: poseQualityGate.getState().lastQualityMetrics
   }),
   getState: () => ({
     capture: poseCaptureNormalizer.getState(),
-    output: avatarOutputStabilizer.getState()
+    output: avatarOutputStabilizer.getState(),
+    quality: poseQualityGate.getState()
   }),
   reset: () => {
     poseCaptureNormalizer.reset();
+    poseQualityGate.reset();
     avatarOutputStabilizer.reset();
   }
 };
@@ -4782,6 +4991,9 @@ async function learn(tt) {
   stopVideo();
     
 	if(trainingData.length < 5){ alert("No datas for traininig model"); return;}
+
+  const qualityReport = reportDatasetPoseQualityBeforeTraining(trainingData);
+  if (!qualityReport.okToTrain) return;
 	
   // console.log(network.trainOpts);
  
@@ -5158,6 +5370,7 @@ document.getElementById('create-train-btn').addEventListener('click', function()
 	  
 	  trainingData = [];
 	  poseCaptureNormalizer.reset();
+	  poseQualityGate.reset();
 	  document.getElementById('moncount').textContent = '0';
 	  selectDatasetInUi(null, dataName);
 
@@ -5199,6 +5412,79 @@ function cloneDatasetFrames(frames) {
     input: frame.input.slice(),
     output: frame.output.slice()
   }));
+}
+
+function decodeDatasetOutputPose(output) {
+  if (!Array.isArray(output) || output.length !== 39) return null;
+  const pose = [];
+  for (let i = 0; i < output.length; i += 3) {
+    pose.push({
+      x: (output[i] * 2) - 1,
+      y: output[i + 1] * 3,
+      z: (output[i + 2] * 10) - 5,
+      visibility: 1
+    });
+  }
+  return pose;
+}
+
+function analyzeDatasetPoseQuality(frames) {
+  const summary = {
+    totalFrames: Array.isArray(frames) ? frames.length : 0,
+    acceptedFrames: 0,
+    suspiciousFrames: 0,
+    suspiciousPercent: 0,
+    lastReason: null,
+    reasons: {}
+  };
+  let previousMetrics = null;
+
+  if (!Array.isArray(frames)) return summary;
+
+  frames.forEach(frame => {
+    const pose = decodeDatasetOutputPose(frame && frame.output);
+    const result = assessPoseQuality(pose, previousMetrics);
+    if (result.ok) {
+      summary.acceptedFrames++;
+      previousMetrics = result.metrics;
+      return;
+    }
+
+    summary.suspiciousFrames++;
+    summary.lastReason = result.reason;
+    summary.reasons[result.reason] = (summary.reasons[result.reason] || 0) + 1;
+  });
+
+  summary.suspiciousPercent = summary.totalFrames
+    ? (summary.suspiciousFrames / summary.totalFrames) * 100
+    : 0;
+  return summary;
+}
+
+function reportDatasetPoseQualityBeforeTraining(frames) {
+  const summary = analyzeDatasetPoseQuality(frames);
+  const percent = summary.suspiciousPercent.toFixed(1);
+  console.log('Dancing5 dataset pose quality:', {
+    totalFrames: summary.totalFrames,
+    acceptedFrames: summary.acceptedFrames,
+    suspiciousFrames: summary.suspiciousFrames,
+    suspiciousPercent: `${percent}%`,
+    lastReason: summary.lastReason,
+    reasons: summary.reasons
+  });
+
+  if (summary.totalFrames && summary.acceptedFrames < 5) {
+    const message = `Dataset pose quality looks unusable: ${summary.acceptedFrames}/${summary.totalFrames} usable frames.`;
+    setDatasetJsonStatus(message, true);
+    alert(message);
+    return { okToTrain: false, summary };
+  }
+
+  if (summary.suspiciousPercent >= 25) {
+    setDatasetJsonStatus(`Dataset pose quality warning: ${percent}% suspicious frames. Training will continue.`, true);
+  }
+
+  return { okToTrain: true, summary };
 }
 
 function buildDatasetExport() {

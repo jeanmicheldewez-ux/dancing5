@@ -46,6 +46,9 @@ const downloadModelBtn = document.getElementById('download-model-btn');
 const exportModelJsonBtn = document.getElementById('export-model-json-btn');
 const importModelJsonBtn = document.getElementById('import-model-json-btn');
 const importModelJsonInput = document.getElementById('import-model-json-input');
+const exportDatasetJsonBtn = document.getElementById('export-dataset-json-btn');
+const importDatasetJsonBtn = document.getElementById('import-dataset-json-btn');
+const importDatasetJsonInput = document.getElementById('import-dataset-json-input');
 const loadDemoModelBtn = document.getElementById('load-demo-model-btn');
 const modelJsonStatus = document.getElementById('model-json-status');
 const avatarStyleSelect = document.getElementById('avatar-style-select');
@@ -82,6 +85,7 @@ const mainControlsToggle = document.getElementById('main-controls-toggle');
 const trainingLog = document.getElementById('training-log');
 
 const MODEL_EXPORT_FORMAT_VERSION = 1;
+const DATASET_EXPORT_FORMAT_VERSION = 1;
 const DEFAULT_DEMO_MODEL_PATH = 'examples/demo-breaker.json';
 const DEFAULT_DEMO_MODEL_NAME = 'demo-breaker.json';
 const EXAMPLE_MODEL_MANIFEST_PATH = 'examples/models.json';
@@ -950,6 +954,11 @@ function updateHiddenLayers() {
     importModelJsonBtn.addEventListener('click', () => importModelJsonInput.click());
     importModelJsonInput.addEventListener('change', importModelJsonFile);
   }
+  if (exportDatasetJsonBtn) exportDatasetJsonBtn.addEventListener('click', exportCurrentDatasetJson);
+  if (importDatasetJsonBtn && importDatasetJsonInput) {
+    importDatasetJsonBtn.addEventListener('click', () => importDatasetJsonInput.click());
+    importDatasetJsonInput.addEventListener('change', importDatasetJsonFile);
+  }
   if (loadDemoModelBtn) loadDemoModelBtn.addEventListener('click', loadDemoModelJson);
   if (avatarHeadPictureDeleteBtn) avatarHeadPictureDeleteBtn.addEventListener('click', deleteSelectedAvatarHeadImage);
   if (avatarVisualToggle && avatarVisualPanel) {
@@ -1016,7 +1025,12 @@ function onResults(results) {
 		//if( pied == 0 && tete == 0)
 
 
-        allPos.push(landmark);
+        allPos.push({
+          x: landmark.x,
+          y: landmark.y,
+          z: landmark.z,
+          visibility: landmark.visibility
+        });
     }
 	
 	
@@ -1026,6 +1040,8 @@ function onResults(results) {
         console.log('One or more landmarks contain NaN values.');
         return; // Exit the function if NaN is detected
     }
+
+    allPos = poseCaptureNormalizer.normalize(allPos);
 	
     thisrun++;
 }
@@ -2438,10 +2454,254 @@ const AVATAR_SIZE_VARIATION_FACTOR = 0.5;
 const AVATAR_REFERENCE_SHOULDER_WIDTH = 92;
 const AVATAR_MAX_WIDTH_RATIO = 0.34;
 const AVATAR_MAX_HEIGHT_RATIO = 0.44;
+const POSE_LANDMARK_COUNT = 13;
+const POSE_CAPTURE_CALIBRATION_FRAMES = 8;
+const POSE_MIN_VISIBILITY = 0.55;
+const POSE_CAPTURE_SCALE_CLAMP = {
+  minX: 0.76,
+  maxX: 1.32,
+  minY: 0.78,
+  maxY: 1.28,
+  blend: 0.82
+};
+const POSE_OUTPUT_SCALE_CLAMP = {
+  minX: 0.72,
+  maxX: 1.38,
+  minY: 0.74,
+  maxY: 1.34,
+  maxFrameScaleStep: 0.045,
+  smooth: 0.22
+};
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
+
+const POSE_INDEX = {
+  NOSE: 0,
+  LS: 1,
+  RS: 2,
+  LE: 3,
+  RE: 4,
+  LW: 5,
+  RW: 6,
+  LH: 7,
+  RH: 8,
+  LK: 9,
+  RK: 10,
+  LA: 11,
+  RA: 12
+};
+
+function clonePoseLandmarks(poseLandmarks) {
+  return (poseLandmarks || []).map(point => point ? {
+    x: point.x,
+    y: point.y,
+    z: point.z,
+    visibility: point.visibility
+  } : null);
+}
+
+function averagePoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+    z: (a.z + b.z) / 2
+  };
+}
+
+function distance3D(a, b) {
+  if (!a || !b) return 0;
+  return Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+}
+
+function getPoseMetricPointVisibility(point) {
+  return point && typeof point.visibility === 'number' ? point.visibility : 1;
+}
+
+function hasStablePoseMetricVisibility(poseLandmarks) {
+  const required = [
+    POSE_INDEX.NOSE,
+    POSE_INDEX.LS,
+    POSE_INDEX.RS,
+    POSE_INDEX.LH,
+    POSE_INDEX.RH,
+    POSE_INDEX.LK,
+    POSE_INDEX.RK,
+    POSE_INDEX.LA,
+    POSE_INDEX.RA
+  ];
+
+  return required.every(index => {
+    const point = poseLandmarks[index];
+    return point &&
+      Number.isFinite(point.x) &&
+      Number.isFinite(point.y) &&
+      Number.isFinite(point.z) &&
+      getPoseMetricPointVisibility(point) >= POSE_MIN_VISIBILITY;
+  });
+}
+
+function getPoseScaleMetrics(poseLandmarks) {
+  if (!poseLandmarks || poseLandmarks.length < POSE_LANDMARK_COUNT || !hasStablePoseMetricVisibility(poseLandmarks)) {
+    return null;
+  }
+
+  const leftShoulder = poseLandmarks[POSE_INDEX.LS];
+  const rightShoulder = poseLandmarks[POSE_INDEX.RS];
+  const leftHip = poseLandmarks[POSE_INDEX.LH];
+  const rightHip = poseLandmarks[POSE_INDEX.RH];
+  const shoulderCenter = averagePoint(leftShoulder, rightShoulder);
+  const hipCenter = averagePoint(leftHip, rightHip);
+  const shoulderWidth = distance3D(leftShoulder, rightShoulder);
+  const hipWidth = distance3D(leftHip, rightHip);
+  const torsoHeight = distance3D(shoulderCenter, hipCenter);
+  const neckHead = distance3D(poseLandmarks[POSE_INDEX.NOSE], shoulderCenter);
+  const leftLeg = distance3D(leftHip, poseLandmarks[POSE_INDEX.LK]) + distance3D(poseLandmarks[POSE_INDEX.LK], poseLandmarks[POSE_INDEX.LA]);
+  const rightLeg = distance3D(rightHip, poseLandmarks[POSE_INDEX.RK]) + distance3D(poseLandmarks[POSE_INDEX.RK], poseLandmarks[POSE_INDEX.RA]);
+  const bodyHeight = neckHead + torsoHeight + ((leftLeg + rightLeg) / 2);
+  const bodyWidth = Math.max(shoulderWidth, hipWidth * 1.08);
+
+  if (bodyHeight < 0.12 || bodyHeight > 3 || bodyWidth < 0.04 || bodyWidth > 2) return null;
+
+  return {
+    center: {
+      x: (shoulderCenter.x + hipCenter.x) / 2,
+      y: (shoulderCenter.y + hipCenter.y) / 2,
+      z: (shoulderCenter.z + hipCenter.z) / 2
+    },
+    bodyHeight,
+    bodyWidth,
+    shoulderWidth
+  };
+}
+
+function medianNumber(values) {
+  const sorted = values.filter(Number.isFinite).slice().sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function createPoseNormalizer(options = {}) {
+  const calibrationFrames = options.calibrationFrames || POSE_CAPTURE_CALIBRATION_FRAMES;
+  const scaleClamp = options.scaleClamp || POSE_CAPTURE_SCALE_CLAMP;
+  const samples = [];
+  let referenceMetrics = null;
+
+  function addCalibrationSample(metrics) {
+    if (!metrics || referenceMetrics || samples.length >= calibrationFrames) return;
+    samples.push(metrics);
+    if (samples.length < calibrationFrames) return;
+
+    referenceMetrics = {
+      bodyHeight: medianNumber(samples.map(item => item.bodyHeight)),
+      bodyWidth: medianNumber(samples.map(item => item.bodyWidth)),
+      shoulderWidth: medianNumber(samples.map(item => item.shoulderWidth)),
+      calibratedAt: new Date().toISOString(),
+      frames: samples.length
+    };
+  }
+
+  function normalize(poseLandmarks) {
+    const pose = clonePoseLandmarks(poseLandmarks);
+    const metrics = getPoseScaleMetrics(pose);
+    if (!metrics) return pose;
+
+    addCalibrationSample(metrics);
+    if (!referenceMetrics || !referenceMetrics.bodyHeight || !referenceMetrics.bodyWidth) return pose;
+
+    const rawScaleX = referenceMetrics.bodyWidth / metrics.bodyWidth;
+    const rawScaleY = referenceMetrics.bodyHeight / metrics.bodyHeight;
+    const scaleX = 1 + (clamp(rawScaleX, scaleClamp.minX, scaleClamp.maxX) - 1) * scaleClamp.blend;
+    const scaleY = 1 + (clamp(rawScaleY, scaleClamp.minY, scaleClamp.maxY) - 1) * scaleClamp.blend;
+
+    return pose.map(point => point ? {
+      x: metrics.center.x + (point.x - metrics.center.x) * scaleX,
+      y: metrics.center.y + (point.y - metrics.center.y) * scaleY,
+      z: metrics.center.z + (point.z - metrics.center.z) * ((scaleX + scaleY) / 2),
+      visibility: point.visibility
+    } : point);
+  }
+
+  return {
+    normalize,
+    getCalibration: () => referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+    reset: () => {
+      samples.length = 0;
+      referenceMetrics = null;
+    }
+  };
+}
+
+function createAvatarBoundsStabilizer(options = {}) {
+  const scaleClamp = options.scaleClamp || POSE_OUTPUT_SCALE_CLAMP;
+  const calibrationFrames = options.calibrationFrames || POSE_CAPTURE_CALIBRATION_FRAMES;
+  const samples = [];
+  let referenceMetrics = null;
+  let lastScaleX = 1;
+  let lastScaleY = 1;
+
+  function rememberReference(metrics) {
+    if (!metrics || referenceMetrics || samples.length >= calibrationFrames) return;
+    samples.push(metrics);
+    if (samples.length < calibrationFrames) return;
+    referenceMetrics = {
+      bodyHeight: medianNumber(samples.map(item => item.bodyHeight)),
+      bodyWidth: medianNumber(samples.map(item => item.bodyWidth)),
+      shoulderWidth: medianNumber(samples.map(item => item.shoulderWidth)),
+      calibratedAt: new Date().toISOString(),
+      frames: samples.length
+    };
+  }
+
+  function stabilize(poseLandmarks) {
+    const pose = clonePoseLandmarks(poseLandmarks);
+    const metrics = getPoseScaleMetrics(pose);
+    if (!metrics) return pose;
+
+    rememberReference(metrics);
+    if (!referenceMetrics || !referenceMetrics.bodyHeight || !referenceMetrics.bodyWidth) return pose;
+
+    const targetScaleX = clamp(referenceMetrics.bodyWidth / metrics.bodyWidth, scaleClamp.minX, scaleClamp.maxX);
+    const targetScaleY = clamp(referenceMetrics.bodyHeight / metrics.bodyHeight, scaleClamp.minY, scaleClamp.maxY);
+    const limitedScaleX = clamp(targetScaleX, lastScaleX - scaleClamp.maxFrameScaleStep, lastScaleX + scaleClamp.maxFrameScaleStep);
+    const limitedScaleY = clamp(targetScaleY, lastScaleY - scaleClamp.maxFrameScaleStep, lastScaleY + scaleClamp.maxFrameScaleStep);
+
+    lastScaleX = lastScaleX + (limitedScaleX - lastScaleX) * scaleClamp.smooth;
+    lastScaleY = lastScaleY + (limitedScaleY - lastScaleY) * scaleClamp.smooth;
+
+    return pose.map(point => point ? {
+      x: metrics.center.x + (point.x - metrics.center.x) * lastScaleX,
+      y: metrics.center.y + (point.y - metrics.center.y) * lastScaleY,
+      z: metrics.center.z + (point.z - metrics.center.z) * ((lastScaleX + lastScaleY) / 2),
+      visibility: point.visibility
+    } : point);
+  }
+
+  return {
+    stabilize,
+    getCalibration: () => referenceMetrics ? Object.assign({}, referenceMetrics) : null,
+    reset: () => {
+      samples.length = 0;
+      referenceMetrics = null;
+      lastScaleX = 1;
+      lastScaleY = 1;
+    }
+  };
+}
+
+// Capture normalization improves future datasets; output stabilization keeps older models from stretching.
+const poseCaptureNormalizer = createPoseNormalizer();
+const avatarOutputStabilizer = createAvatarBoundsStabilizer();
+window.Dancing5PoseCalibration = {
+  getCapture: () => poseCaptureNormalizer.getCalibration(),
+  getOutput: () => avatarOutputStabilizer.getCalibration(),
+  reset: () => {
+    poseCaptureNormalizer.reset();
+    avatarOutputStabilizer.reset();
+  }
+};
 
 function clampPointToDistance(point, anchor, maxDistance) {
   if (!point || !anchor || !Number.isFinite(maxDistance) || maxDistance <= 0) return point;
@@ -2844,6 +3104,7 @@ function renderMagicAvatar(poseLandmarks) {
   const intensity = clamp((features.energy * features.reactive + motionEnergy * 1.35) / 2, 0, 1.6);
   const thickness = visualSettings.avatarThickness || 1;
   const headScale = visualSettings.avatarHeadScale || 1;
+  const magicHeadScale = getAvatarHeadScaleMultiplier(variant);
   const trailAlpha = clamp(0.10 + intensity * 0.18, 0.10, 0.38);
   const pulse = 1 + features.bass * 0.7 + motionEnergy * 0.65;
   const torso = points[1] && points[2] && points[7] && points[8]
@@ -2979,7 +3240,8 @@ function renderMagicAvatar(poseLandmarks) {
     if (!point) return;
     const isHand = index === 5 || index === 6;
     const isFoot = index === 11 || index === 12;
-    const radius = (isHand ? 8 : isFoot ? 6 : 5) * headScale * (0.85 + features.bass * 0.55 + motionEnergy * 0.45);
+    const isHead = index === 0;
+    const radius = (isHand ? 8 : isFoot ? 6 : 5) * headScale * (isHead ? magicHeadScale : 1) * (0.85 + features.bass * 0.55 + motionEnergy * 0.45);
     const gradient = canvasCtx.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius * 3.2);
     gradient.addColorStop(0, colors.white);
     gradient.addColorStop(0.35, index % 2 ? colors.accent : colors.second);
@@ -3023,6 +3285,34 @@ function normalizeAvatarThickness(value) {
 function normalizeAvatarHeadScale(value) {
   const numberValue = parseFloat(value);
   return Number.isFinite(numberValue) ? clamp(numberValue, 0.65, 2.4) : DEFAULT_VISUAL_SETTINGS.avatarHeadScale;
+}
+
+function normalizeAvatarModeName(mode) {
+  return String(mode || '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+function getAvatarHeadScaleMultiplier(mode = visualSettings.avatarStyle) {
+  const normalizedMode = normalizeAvatarModeName(mode);
+  return ['lesaint', 'myhead', 'magic', 'magic2'].includes(normalizedMode) ? 2.5 : 0.8;
+}
+
+function getVisualAvatarHeadScale(mode = visualSettings.avatarStyle) {
+  return (visualSettings.avatarHeadScale || 1) * getAvatarHeadScaleMultiplier(mode);
+}
+
+function clampHeadSizeToCanvas(size, minSize, maxRatio = 0.58) {
+  const maxSize = Math.max(minSize, Math.min(canvasElement.clientWidth, canvasElement.clientHeight) * maxRatio);
+  return clamp(size, minSize, maxSize);
+}
+
+function clampHeadWidthForAnchor(width, minWidth, aspectRatio, anchorY, topOffsetRatio, maxRatio = 0.58) {
+  const canvasMax = clampHeadSizeToCanvas(width, minWidth, maxRatio);
+  const topMax = Number.isFinite(anchorY) && anchorY > 0
+    ? Math.max(minWidth, anchorY / Math.max(0.01, aspectRatio * topOffsetRatio))
+    : canvasMax;
+  return Math.min(canvasMax, topMax);
 }
 
 function normalizePercentSlider(value, fallback) {
@@ -3576,9 +3866,9 @@ function drawSkewedRoundBox(x, y, w, h, skew, radius, fill, stroke, lineWidth) {
   const nX = nProj.x * W * scale + stageCenterX;
   const nY = nProj.y * H * scale + stageCenterY;
 
-  const headSizeScale = visualSettings.avatarHeadScale || 1;
-  const hW = clamp(shoulderW * 1.35 * headSizeScale, 35, 430);
-  const hH = clamp(hW * 1.1, 60, 470);
+  const headSizeScale = getVisualAvatarHeadScale(visualSettings.avatarStyle);
+  const hW = clampHeadWidthForAnchor(shoulderW * 1.35 * headSizeScale, 28, 1.1, nY, 0.62);
+  const hH = hW * 1.1;
 
   const hX = nX - hW / 2;
   const hY = nY - hH * 0.62;
@@ -3595,8 +3885,8 @@ const faceSkew = headSkew * 0.55;
 
   const shoulderCenterX = (p11.x + p12.x) / 2;
   const shoulderTopY = Math.min(p11.y, p12.y);
-  const attachedHeadW = clamp(shoulderW * 1.05 * headSizeScale, 34, 360);
-  const attachedHeadH = clamp(attachedHeadW * 1.08, 38, 390);
+  const attachedHeadW = clampHeadWidthForAnchor(shoulderW * 1.05 * headSizeScale, 28, 1.08, shoulderTopY, 1.01);
+  const attachedHeadH = attachedHeadW * 1.08;
   const attachedHeadX = shoulderCenterX - attachedHeadW / 2;
   const attachedHeadY = shoulderTopY - attachedHeadH * 0.92;
   const attachedHeadSkew = headSkew * 0.35;
@@ -3870,7 +4160,14 @@ function drawBoy(dtx) {
             const noseY = noseProj.y * H * scale + canvasCenterY;
 
             // Reduced head size to make it proportional
-            const headDiameter = 10 * (visualSettings.avatarHeadScale || 1) * (perspective / viewerDistance);
+            const headDiameter = clampHeadWidthForAnchor(
+              10 * getVisualAvatarHeadScale('le saint') * (perspective / viewerDistance),
+              5,
+              1,
+              noseY,
+              0.5,
+              0.42
+            );
             canvasCtx.beginPath();
             canvasCtx.arc(noseX, noseY, headDiameter / 2, 0, 2 * Math.PI);
             canvasCtx.fillStyle = visualSettings.avatarColor;
@@ -4001,7 +4298,7 @@ function visualize()
         });
       }
 
-      nextBrainPos = applyMotionAmountToPose(brainPos);			
+      nextBrainPos = avatarOutputStabilizer.stabilize(applyMotionAmountToPose(brainPos));			
     }
     else if (spacer > 5)
     {
@@ -4083,6 +4380,9 @@ function createNewModel() {
             hiddenLayers: hiddenLayers, // Ensure hiddenLayers is defined elsewhere
             activation: selectedValidation
         });
+        avatarOutputStabilizer.reset();
+        lastBrainPos = [];
+        nextBrainPos = [];
         console.log(`Neural network "${modelName}" created successfully.`);
     } catch (error) {
         console.error('Error creating neural network:', error);
@@ -4435,6 +4735,9 @@ function loadModel(modelName) {
 
 				network = new brain.NeuralNetwork();
 				network.fromJSON(model.data);
+				avatarOutputStabilizer.reset();
+				lastBrainPos = [];
+				nextBrainPos = [];
 				currentModelName = modelName;
 				rememberLastModelName(modelName);
 
@@ -4485,6 +4788,7 @@ document.getElementById('create-train-btn').addEventListener('click', function()
 	  }
 	  
 	  trainingData = [];
+	  poseCaptureNormalizer.reset();
 	  document.getElementById('moncount').textContent = '0';
 	  selectDatasetInUi(null, dataName);
 
@@ -4505,6 +4809,143 @@ function safeFilePart(value) {
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
   return cleaned || new Date().toISOString().slice(0, 10);
+}
+
+function setDatasetJsonStatus(message, isError) {
+  setModelJsonStatus(message, isError);
+}
+
+function isValidDatasetFrame(frame) {
+  return frame &&
+    Array.isArray(frame.input) &&
+    Array.isArray(frame.output) &&
+    frame.input.length === 64 &&
+    frame.output.length === 39 &&
+    frame.input.every(Number.isFinite) &&
+    frame.output.every(Number.isFinite);
+}
+
+function cloneDatasetFrames(frames) {
+  return frames.map(frame => ({
+    input: frame.input.slice(),
+    output: frame.output.slice()
+  }));
+}
+
+function buildDatasetExport() {
+  return {
+    app: 'Dancing5',
+    type: 'dataset',
+    formatVersion: DATASET_EXPORT_FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    dataset: {
+      name: dataName || 'current-dataset',
+      frameCount: trainingData.length,
+      createdAt: null,
+      normalization: {
+        capture: poseCaptureNormalizer.getCalibration()
+      },
+      data: cloneDatasetFrames(trainingData)
+    },
+    metadata: {
+      inputSize: 64,
+      outputSize: 39,
+      outputLandmarks: 'nose, shoulders, elbows, wrists, hips, knees, ankles',
+      outputRange: {
+        x: 'stored as (x + 1) / 2',
+        y: 'stored as y / 3',
+        z: 'stored as (z + 5) / 10'
+      }
+    }
+  };
+}
+
+function validateDatasetExport(data) {
+  if (!data || typeof data !== 'object') {
+    throw new Error('The file is not a JSON object.');
+  }
+
+  if (data.app !== 'Dancing5' || data.type !== 'dataset') {
+    throw new Error('This does not look like a Dancing5 dataset export.');
+  }
+
+  const frames = data.dataset && Array.isArray(data.dataset.data) ? data.dataset.data : null;
+  if (!frames || !frames.length) {
+    throw new Error('The dataset export does not contain frames.');
+  }
+
+  const badIndex = frames.findIndex(frame => !isValidDatasetFrame(frame));
+  if (badIndex !== -1) {
+    throw new Error(`Dataset frame ${badIndex + 1} has an invalid input/output shape.`);
+  }
+
+  return true;
+}
+
+function exportCurrentDatasetJson() {
+  try {
+    if (!trainingData || !trainingData.length) {
+      setDatasetJsonStatus('No dataset frames are available to export.', true);
+      return;
+    }
+
+    const exportData = buildDatasetExport();
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `dancing5-dataset-${safeFilePart(exportData.dataset.name || exportData.exportedAt)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    setDatasetJsonStatus(`Exported dataset "${exportData.dataset.name}" (${exportData.dataset.frameCount} frames).`, false);
+  } catch (error) {
+    console.error('Dancing5 dataset export failed.', error);
+    setDatasetJsonStatus(`Dataset export failed: ${error.message || error}`, true);
+  }
+}
+
+function importDatasetExport(data) {
+  validateDatasetExport(data);
+
+  const nextName = (data.dataset && data.dataset.name ? String(data.dataset.name).trim() : '') || 'imported-dataset';
+  const frames = cloneDatasetFrames(data.dataset.data);
+
+  if (trainingData && trainingData.length) {
+    const confirmed = confirm(`Replace the current dataset (${trainingData.length} frames) with "${nextName}" (${frames.length} frames)?`);
+    if (!confirmed) return false;
+  }
+
+  trainingData = frames;
+  dataName = nextName;
+  document.getElementById('moncount').textContent = trainingData.length;
+  selectDatasetInUi(null, dataName);
+  setDatasetJsonStatus(`Loaded dataset "${dataName}" (${trainingData.length} frames). Use Save to store it in this browser.`, false);
+  return true;
+}
+
+function importDatasetJsonFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  setDatasetJsonStatus(`Dataset import started: ${file.name}`, false);
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      importDatasetExport(data);
+    } catch (error) {
+      console.error('Dancing5 dataset import failed.', error);
+      setDatasetJsonStatus(`Dataset import failed: ${error.message || error}`, true);
+    } finally {
+      importDatasetJsonInput.value = '';
+    }
+  };
+  reader.onerror = () => {
+    setDatasetJsonStatus('Dataset import failed: the file could not be read.', true);
+    importDatasetJsonInput.value = '';
+  };
+  reader.readAsText(file);
 }
 
 function getTrainingSettingsSnapshot() {
@@ -5008,6 +5449,9 @@ async function importModelExport(data, sourceLabel, options = {}) {
 
     network = new brain.NeuralNetwork();
     network.fromJSON(modelRecord.data);
+    avatarOutputStabilizer.reset();
+    lastBrainPos = [];
+    nextBrainPos = [];
     selectModelInUi(modelName);
     await saveLastSession(modelName);
     if (!options.skipPopulate) populateModels();
@@ -5170,6 +5614,9 @@ function saveData() {
     const dataRecord = {
         name: dataName ,          // Name of the model
         data: trainingData,              // The actual training data
+        normalization: {
+          capture: poseCaptureNormalizer.getCalibration()
+        },
         createdAt: new Date().toISOString() // Timestamp for reference
     };
 

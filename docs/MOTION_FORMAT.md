@@ -39,8 +39,36 @@ Training datasets are saved in IndexedDB store `datas` as:
       "output": [0.0]
     }
   ],
+  "normalization": {
+    "capture": {
+      "bodyHeight": 0.0,
+      "bodyWidth": 0.0,
+      "shoulderWidth": 0.0,
+      "calibratedAt": "2026-05-31T00:00:00.000Z",
+      "frames": 8
+    }
+  },
   "createdAt": "2026-05-31T00:00:00.000Z"
 }
 ```
 
-The training data format is not yet versioned separately.
+Dataset export wraps the same frame objects in a versioned browser JSON envelope:
+
+```json
+{
+  "app": "Dancing5",
+  "type": "dataset",
+  "formatVersion": 1,
+  "exportedAt": "2026-05-31T00:00:00.000Z",
+  "dataset": {
+    "name": "dataset-name",
+    "frameCount": 1,
+    "normalization": {
+      "capture": {}
+    },
+    "data": []
+  }
+}
+```
+
+The frame format is unchanged for compatibility with existing Brain.js training.

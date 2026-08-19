@@ -76,6 +76,8 @@ const audioInputGainSlider = document.getElementById('audio-input-gain-slider');
 const audioInputGainValue = document.getElementById('audio-input-gain-value');
 const backgroundModeSelect = document.getElementById('background-mode-select');
 const backgroundColorInput = document.getElementById('background-color-input');
+const cameraBackgroundVideo = document.getElementById('cameraBackgroundVideo');
+const cameraBackgroundStatus = document.getElementById('camera-background-status');
 const avatarVisualToggle = document.getElementById('avatar-visual-toggle');
 const avatarVisualPanel = document.getElementById('avatar-visual-panel');
 const modelManager = document.getElementById('model-manager');
@@ -119,6 +121,12 @@ const DEFAULT_VISUAL_SETTINGS = {
   backgroundColor: '#000000'
 };
 let visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS);
+const CAMERA_BACKGROUND_MODE = 'camera';
+const CAMERA_BACKGROUND_MODES = ['none', 'solid', 'gradient', 'magic', CAMERA_BACKGROUND_MODE];
+let cameraBackgroundStream = null;
+let cameraBackgroundRequestId = 0;
+let cameraBackgroundToastTimer = null;
+let cameraBackgroundFrameId = null;
 const CUSTOM_HEAD_IMAGE = new Image();
 let selectedHeadPictureName = DEFAULT_HEAD_PICTURE.name;
 let avatarImageCache = [];
@@ -749,6 +757,116 @@ function clearAvatarCanvas() {
   canvasCtx.setTransform(1, 0, 0, 1, 0, 0);
   canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
   canvasCtx.restore();
+}
+
+function showCameraBackgroundStatus(message) {
+  if (!cameraBackgroundStatus) return;
+  cameraBackgroundStatus.textContent = message || '';
+  cameraBackgroundStatus.classList.toggle('is-visible', Boolean(message));
+  if (cameraBackgroundToastTimer) clearTimeout(cameraBackgroundToastTimer);
+  if (message) {
+    cameraBackgroundToastTimer = setTimeout(() => {
+      cameraBackgroundStatus.textContent = '';
+      cameraBackgroundStatus.classList.remove('is-visible');
+    }, 4200);
+  }
+}
+
+function getCameraBackgroundConstraints() {
+  const userAgent = navigator.userAgent || '';
+  const coarseSmallScreen = window.matchMedia &&
+    window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches;
+  const isLikelyMobile = Boolean(
+    (navigator.userAgentData && navigator.userAgentData.mobile) ||
+    /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
+    coarseSmallScreen
+  );
+  return {
+    audio: false,
+    video: isLikelyMobile
+      ? { facingMode: { ideal: 'environment' } }
+      : true
+  };
+}
+
+function stopCameraBackground() {
+  cameraBackgroundRequestId++;
+  if (cameraBackgroundFrameId) {
+    cancelAnimationFrame(cameraBackgroundFrameId);
+    cameraBackgroundFrameId = null;
+  }
+  if (cameraBackgroundStream) {
+    cameraBackgroundStream.getTracks().forEach(track => track.stop());
+    cameraBackgroundStream = null;
+  }
+  if (cameraBackgroundVideo) {
+    cameraBackgroundVideo.pause();
+    cameraBackgroundVideo.removeAttribute('src');
+    cameraBackgroundVideo.srcObject = null;
+  }
+}
+
+function drawCameraBackground() {
+  if (!cameraBackgroundVideo || !cameraBackgroundStream || cameraBackgroundVideo.readyState < 2) {
+    clearAvatarCanvas();
+    return;
+  }
+
+  clearAvatarCanvas();
+
+  const canvasWidth = canvasElement.clientWidth;
+  const canvasHeight = canvasElement.clientHeight;
+  const videoWidth = cameraBackgroundVideo.videoWidth || canvasWidth;
+  const videoHeight = cameraBackgroundVideo.videoHeight || canvasHeight;
+  const scale = Math.max(canvasWidth / videoWidth, canvasHeight / videoHeight);
+  const drawWidth = videoWidth * scale;
+  const drawHeight = videoHeight * scale;
+  const drawX = (canvasWidth - drawWidth) / 2;
+  const drawY = (canvasHeight - drawHeight) / 2;
+
+  canvasCtx.drawImage(cameraBackgroundVideo, drawX, drawY, drawWidth, drawHeight);
+}
+
+function tickCameraBackground() {
+  if (visualSettings.backgroundMode !== CAMERA_BACKGROUND_MODE || !cameraBackgroundStream) {
+    cameraBackgroundFrameId = null;
+    return;
+  }
+  requestAvatarRedraw();
+  cameraBackgroundFrameId = requestAnimationFrame(tickCameraBackground);
+}
+
+async function startCameraBackground(fallbackMode) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !cameraBackgroundVideo) {
+    showCameraBackgroundStatus('Camera unavailable. Reverted background.');
+    applyVisualSettings(Object.assign({}, visualSettings, { backgroundMode: fallbackMode || DEFAULT_VISUAL_SETTINGS.backgroundMode }));
+    requestAvatarRedraw();
+    return;
+  }
+
+  const requestId = ++cameraBackgroundRequestId;
+  try {
+    stopCameraBackground();
+    cameraBackgroundRequestId = requestId;
+    const stream = await navigator.mediaDevices.getUserMedia(getCameraBackgroundConstraints());
+    if (requestId !== cameraBackgroundRequestId || visualSettings.backgroundMode !== CAMERA_BACKGROUND_MODE) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    cameraBackgroundStream = stream;
+    cameraBackgroundVideo.srcObject = stream;
+    await cameraBackgroundVideo.play();
+    showCameraBackgroundStatus('');
+    if (!cameraBackgroundFrameId) cameraBackgroundFrameId = requestAnimationFrame(tickCameraBackground);
+    requestAvatarRedraw();
+  } catch (error) {
+    console.warn('Camera background unavailable:', error);
+    stopCameraBackground();
+    showCameraBackgroundStatus('Camera permission unavailable. Reverted background.');
+    applyVisualSettings(Object.assign({}, visualSettings, { backgroundMode: fallbackMode || DEFAULT_VISUAL_SETTINGS.backgroundMode }));
+    requestAvatarRedraw();
+    scheduleLastSessionSave();
+  }
 }
 
 // Get the DOM elements
@@ -3059,14 +3177,33 @@ function renderMagicBackground(poseLandmarks) {
 
 function renderFrameBase(poseLandmarks) {
   const wantsFullscreen = visualSettings.backgroundMode === 'magic' ||
+    visualSettings.backgroundMode === CAMERA_BACKGROUND_MODE ||
     visualSettings.avatarStyle === 'magic' ||
     visualSettings.avatarStyle === 'magic2';
   setAvatarCanvasLayout(wantsFullscreen ? 'fullscreen' : 'normal');
 
   if (visualSettings.backgroundMode === 'magic') {
     renderMagicBackground(poseLandmarks);
+  } else if (visualSettings.backgroundMode === CAMERA_BACKGROUND_MODE) {
+    drawCameraBackground();
   } else {
     clearAvatarCanvas();
+  }
+}
+
+function renderIdleVisualFrame() {
+  if (visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') {
+    renderMagicAvatar(null);
+    return;
+  }
+
+  if (visualSettings.backgroundMode === 'magic') {
+    renderMagicAvatar(null);
+    return;
+  }
+
+  if (visualSettings.backgroundMode === CAMERA_BACKGROUND_MODE) {
+    renderFrameBase(null);
   }
 }
 
@@ -3421,6 +3558,7 @@ function getAvatarPalette() {
 }
 
 function applyVisualSettings(settings) {
+  const previousBackgroundMode = visualSettings.backgroundMode;
   visualSettings = Object.assign({}, DEFAULT_VISUAL_SETTINGS, settings || {});
   visualSettings.avatarStyle = ['robot', 'myHead', 'neon', 'wire', 'leSaint', 'magic', 'magic2'].includes(visualSettings.avatarStyle)
     ? visualSettings.avatarStyle
@@ -3430,7 +3568,7 @@ function applyVisualSettings(settings) {
   visualSettings.avatarHeadScale = normalizeAvatarHeadScale(visualSettings.avatarHeadScale);
   visualSettings.musicReactivity = normalizePercentSlider(visualSettings.musicReactivity, DEFAULT_VISUAL_SETTINGS.musicReactivity);
   visualSettings.motionAmount = normalizePercentSlider(visualSettings.motionAmount, DEFAULT_VISUAL_SETTINGS.motionAmount);
-  visualSettings.backgroundMode = ['none', 'solid', 'gradient', 'magic'].includes(visualSettings.backgroundMode)
+  visualSettings.backgroundMode = CAMERA_BACKGROUND_MODES.includes(visualSettings.backgroundMode)
     ? visualSettings.backgroundMode
     : DEFAULT_VISUAL_SETTINGS.backgroundMode;
   visualSettings.backgroundColor = normalizeHexColor(visualSettings.backgroundColor, DEFAULT_VISUAL_SETTINGS.backgroundColor);
@@ -3451,6 +3589,15 @@ function applyVisualSettings(settings) {
     document.body.style.backgroundColor = visualSettings.backgroundColor;
   } else {
     document.body.style.backgroundColor = '';
+  }
+
+  if (visualSettings.backgroundMode === CAMERA_BACKGROUND_MODE) {
+    const fallbackMode = previousBackgroundMode && previousBackgroundMode !== CAMERA_BACKGROUND_MODE
+      ? previousBackgroundMode
+      : DEFAULT_VISUAL_SETTINGS.backgroundMode;
+    if (!cameraBackgroundStream) startCameraBackground(fallbackMode);
+  } else if (previousBackgroundMode === CAMERA_BACKGROUND_MODE || cameraBackgroundStream) {
+    stopCameraBackground();
   }
 }
 
@@ -4276,8 +4423,8 @@ function visualize()
   if (flagLearned == 0) {
     if (allPos && allPos.length > 0) {
       drawBoy(allPos);
-    } else if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') {
-      renderMagicAvatar(null);
+    } else {
+      renderIdleVisualFrame();
     }
     return;
   }
@@ -4285,19 +4432,22 @@ function visualize()
   // MODE AI / MODEL
   // Here we need audio FFT data.
   if (!newDt) {
-    if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') renderMagicAvatar(null);
+    renderIdleVisualFrame();
     return;
   }
 
   if (flagLearned == 1 && newDt)
   {
     if (!network) {
-      if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') renderMagicAvatar(null);
+      renderIdleVisualFrame();
       return;
     }
     if (network.weights.length == 0) {
-      if (visualSettings.backgroundMode === 'magic' || visualSettings.avatarStyle === 'magic' || visualSettings.avatarStyle === 'magic2') {
-        renderMagicAvatar(null);
+      if (visualSettings.backgroundMode === 'magic' ||
+          visualSettings.backgroundMode === CAMERA_BACKGROUND_MODE ||
+          visualSettings.avatarStyle === 'magic' ||
+          visualSettings.avatarStyle === 'magic2') {
+        renderIdleVisualFrame();
         return;
       }
       alert("Model not trained ^^");

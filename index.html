@@ -173,6 +173,7 @@ bottom:244px; left:4px; width:25%; max-height:80%; z-index:1000;"></video>
         <option value="solid">Solid color</option>
         <option value="gradient">Animated gradient</option>
         <option value="magic">Magic</option>
+        <option value="camera">AR Camera</option>
       </select>
       <label for="background-color-input">Background Color:</label>
       <input id="background-color-input" type="color" value="#000000">
@@ -320,6 +321,9 @@ font-weight:bold; padding-top:0px;  padding-bottom:0px;	border-radius:4px;" oncl
   </div>
 </div>
 
+
+<video id="cameraBackgroundVideo" playsinline muted aria-hidden="true" style="display:none;"></video>
+<div id="camera-background-status" class="camera-background-status" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js"></script>
